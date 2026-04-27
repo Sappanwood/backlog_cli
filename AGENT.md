@@ -1,6 +1,6 @@
 # AGENT.md — Backlog CLI 开发路由中枢
 
-> 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具，请阅读 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md)。
+> 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具，系统 skill `backlog` 已自动装载合约内容，也可阅读 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md)。
 
 ## 绝对红线
 
@@ -16,7 +16,8 @@
 |------|--------|----------|
 | [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
-| [docs/BACKLOG.md](docs/BACKLOG.md) | 选择下一个开发任务、查找已知技术债 | 发现 bug、有想法暂不实现、完成一条待办 |
+| `backlog list --status todo` | 寻找下一个开发任务 | 完成条目后通过 `backlog update --fixed` 标记 |
+| `backlog stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映 |
 
 ## 项目速览
 
