@@ -1,19 +1,19 @@
 """Backlog data models."""
 
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 
-class Priority(str, Enum):
+class Priority(StrEnum):
     P0 = "P0"
     P1 = "P1"
     P2 = "P2"
     P3 = "P3"
 
 
-class Effort(str, Enum):
+class Effort(StrEnum):
     XS = "XS"
     S = "S"
     M = "M"
@@ -21,13 +21,13 @@ class Effort(str, Enum):
     XL = "XL"
 
 
-class Impact(str, Enum):
+class Impact(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     TODO = "todo"
     IN_PROGRESS = "in_progress"
     DONE = "done"
@@ -35,7 +35,7 @@ class Status(str, Enum):
     BLOCKED = "blocked"
 
 
-class Category(str, Enum):
+class Category(StrEnum):
     BUG = "bug"
     A11Y = "a11y"
     UX = "ux"

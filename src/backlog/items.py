@@ -1,13 +1,11 @@
 """CRUD operations for backlog items."""
 
-import os
 from datetime import date, datetime
 from pathlib import Path
 
 import frontmatter
-import yaml
 
-from .models import BacklogItem, Category, Effort, Impact, Priority, Status
+from .models import BacklogItem, Status
 
 ITEMS_DIRNAME = "items"
 INDEX_FILENAME = "INDEX.md"
@@ -37,26 +35,39 @@ def get_items_dir(project_path: Path | None = None) -> Path:
 def _load_item(filepath: Path) -> BacklogItem | None:
     """Load a single backlog item from a markdown file."""
     try:
-        post = frontmatter.load(filepath)
+        post = frontmatter.load(str(filepath))
     except Exception:
         return None
-    meta = dict(post.metadata)
-    meta["id"] = meta.get("id", filepath.stem)
-    meta.setdefault("body", post.content)
-    # Handle date fields: both str and date accepted
-    for field in ("created", "updated", "fixed_at"):
-        val = meta.get(field)
-        if isinstance(val, str):
-            meta[field] = datetime.strptime(val, "%Y-%m-%d").date()
-        elif isinstance(val, datetime):
-            meta[field] = val.date()
-        elif val is None and field != "fixed_at":
-            meta[field] = date.today()
-    return BacklogItem.model_validate(meta)
+    try:
+        meta = dict(post.metadata)
+        meta["id"] = meta.get("id", filepath.stem)
+        meta.setdefault("body", post.content)
+        # Handle date fields: both str and date accepted
+        for field in ("created", "updated", "fixed_at"):
+            val = meta.get(field)
+            if isinstance(val, str):
+                meta[field] = datetime.strptime(val, "%Y-%m-%d").date()
+            elif isinstance(val, datetime):
+                meta[field] = val.date()
+            elif val is None and field != "fixed_at":
+                meta[field] = date.today()
+        return BacklogItem.model_validate(meta)
+    except Exception:
+        return None
+
+
+def _apply_dependency_blocking(items: list[BacklogItem]) -> None:
+    """Auto-mark items as blocked when any dependency is not done."""
+    done_ids = {item.id for item in items if item.status == Status.DONE}
+    for item in items:
+        if item.status in (Status.DONE, Status.CANCELLED):
+            continue
+        if item.depends_on and not all(dep in done_ids for dep in item.depends_on):
+            item.status = Status.BLOCKED
 
 
 def list_items(project_path: Path | None = None) -> list[BacklogItem]:
-    """List all backlog items."""
+    """List all backlog items. Auto-marks items as blocked if dependencies are not done."""
     items_dir = get_items_dir(project_path)
     items: list[BacklogItem] = []
     if not items_dir.exists():
@@ -65,16 +76,28 @@ def list_items(project_path: Path | None = None) -> list[BacklogItem]:
         item = _load_item(f)
         if item is not None:
             items.append(item)
+    _apply_dependency_blocking(items)
     return items
 
 
 def show_item(item_id: str, project_path: Path | None = None) -> BacklogItem | None:
-    """Show a single item by ID."""
+    """Show a single item by ID. Auto-marks as blocked if dependencies are not done."""
     items_dir = get_items_dir(project_path)
     filepath = items_dir / f"{item_id}.md"
     if not filepath.exists():
         return None
-    return _load_item(filepath)
+    item = _load_item(filepath)
+    if item is None:
+        return None
+    if item.status not in (Status.DONE, Status.CANCELLED) and item.depends_on:
+        done_ids = {
+            i.id
+            for i in list_items(project_path)
+            if i.status == Status.DONE
+        }
+        if not all(dep in done_ids for dep in item.depends_on):
+            item.status = Status.BLOCKED
+    return item
 
 
 def next_id(project_name: str, project_path: Path | None = None) -> str:
@@ -179,8 +202,8 @@ def generate_index(
 
     lines.append("## By Priority")
     lines.append("")
-    lines.append(f"| Priority | Count |")
-    lines.append(f"|----------|-------|")
+    lines.append("| Priority | Count |")
+    lines.append("|----------|-------|")
     for p in ("P0", "P1", "P2", "P3"):
         lines.append(f"| {p} | {by_priority.get(p, 0)} |")
     lines.append("")

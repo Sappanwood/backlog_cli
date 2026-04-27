@@ -3,12 +3,11 @@
 import os
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.table import Table
-from typing_extensions import Annotated
 
 from .items import add_item, generate_index, list_items, next_id, show_item, update_item
 from .models import (
@@ -28,7 +27,7 @@ _project_dir: Path | None = None
 @app.callback()
 def main(
     dir: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Option("--dir", "-d", help="Project directory (default: current dir)"),
     ] = None,
 ):
@@ -89,11 +88,11 @@ def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
 
 @app.command(name="list")
 def list_cmd(
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
-    category: Optional[Category] = typer.Option(None, "--category", "-c", help="Filter by category"),
-    priority: Optional[str] = typer.Option(None, "--priority", help="Filter by priority (comma-separated, e.g. P0,P1)"),
-    status: Optional[Status] = typer.Option(None, "--status", "-s", help="Filter by status"),
-    tag: Optional[str] = typer.Option(None, "--tag", "-t", help="Filter by tag"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
+    category: Category | None = typer.Option(None, "--category", "-c", help="Filter by category"),
+    priority: str | None = typer.Option(None, "--priority", help="Filter by priority (comma-separated, e.g. P0,P1)"),
+    status: Status | None = typer.Option(None, "--status", "-s", help="Filter by status"),
+    tag: str | None = typer.Option(None, "--tag", "-t", help="Filter by tag"),
     sort: str = typer.Option("score", "--sort", help="Sort by: score, priority, id"),
     limit: int = typer.Option(0, "--limit", "-n", help="Limit results"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
@@ -140,7 +139,10 @@ def show(
         console.print(f"[red]Item '{item_id}' not found.[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[bold cyan]{item.id}[/bold cyan]  [red]{item.priority.value}[/red]  [yellow]{item.category.value}[/yellow]")
+    console.print(
+        f"[bold cyan]{item.id}[/bold cyan]  [red]{item.priority.value}[/red]  "
+        f"[yellow]{item.category.value}[/yellow]"
+    )
     console.print(f"[bold white]{item.title}[/bold white]")
     console.print()
     console.print(f"Status: [bold]{item.status.value}[/bold]")
@@ -149,7 +151,22 @@ def show(
     if item.tags:
         console.print(f"Tags: {', '.join(item.tags)}")
     if item.depends_on:
-        console.print(f"Depends on: {', '.join(item.depends_on)}")
+        all_items = {i.id: i for i in list_items(_project_path())}
+        dep_statuses = []
+        has_blocking = False
+        for dep_id in item.depends_on:
+            dep = all_items.get(dep_id)
+            if dep is None:
+                dep_statuses.append(f"[red]{dep_id} (missing)[/red]")
+                has_blocking = True
+            elif dep.status == Status.DONE:
+                dep_statuses.append(f"[green]{dep_id} ({dep.status.value})[/green]")
+            else:
+                dep_statuses.append(f"[red]{dep_id} ({dep.status.value})[/red]")
+                has_blocking = True
+        console.print(f"Depends on: {', '.join(dep_statuses)}")
+        if item.status == Status.BLOCKED and has_blocking:
+            console.print("[yellow]Blocked: some dependencies are not done[/yellow]")
     console.print(f"Created: {item.created}  |  Updated: {item.updated}")
     if item.fixed_at:
         console.print(f"Fixed at: {item.fixed_at}")
@@ -197,16 +214,16 @@ def add(
 @app.command()
 def update(
     item_id: str = typer.Argument(..., help="Item ID to update"),
-    title: Optional[str] = typer.Option(None, "--title", help="New title"),
-    category: Optional[Category] = typer.Option(None, "--category", "-c", help="New category"),
-    priority: Optional[Priority] = typer.Option(None, "--priority", help="New priority"),
-    effort: Optional[Effort] = typer.Option(None, "--effort", "-e", help="New effort"),
-    impact: Optional[Impact] = typer.Option(None, "--impact", "-i", help="New impact"),
-    status: Optional[Status] = typer.Option(None, "--status", "-s", help="New status"),
-    tags: Optional[str] = typer.Option(None, "--tags", help="Comma-separated tags (replaces)"),
-    source: Optional[str] = typer.Option(None, "--source", help="New source label"),
+    title: str | None = typer.Option(None, "--title", help="New title"),
+    category: Category | None = typer.Option(None, "--category", "-c", help="New category"),
+    priority: Priority | None = typer.Option(None, "--priority", help="New priority"),
+    effort: Effort | None = typer.Option(None, "--effort", "-e", help="New effort"),
+    impact: Impact | None = typer.Option(None, "--impact", "-i", help="New impact"),
+    status: Status | None = typer.Option(None, "--status", "-s", help="New status"),
+    tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags (replaces)"),
+    source: str | None = typer.Option(None, "--source", help="New source label"),
     fixed: bool = typer.Option(False, "--fixed", "-f", help="Mark as done with today's date (shorthand)"),
-    body: Optional[str] = typer.Option(None, "--body", "-b", help="New body text"),
+    body: str | None = typer.Option(None, "--body", "-b", help="New body text"),
 ):
     """Update a backlog item."""
     updates: dict = {}
@@ -247,7 +264,7 @@ def update(
 
 @app.command()
 def stats(
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
 ):
     """Show backlog statistics."""
     items = list_items(_project_path())
@@ -307,7 +324,7 @@ def stats(
 
 @app.command(name="next")
 def next_cmd(
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     limit: int = typer.Option(5, "--limit", "-n", help="Number of items to show"),
 ):
     """Show recommended next items sorted by priority score."""
@@ -328,7 +345,7 @@ def next_cmd(
 
 @app.command()
 def index(
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project"),
+    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
 ):
     """Generate docs/backlog/INDEX.md overview."""
     content = generate_index(_project_path())
