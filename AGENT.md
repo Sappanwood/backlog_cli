@@ -16,8 +16,8 @@
 |------|--------|----------|
 | [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
-| `backlog list --status todo` | 寻找下一个开发任务 | 完成条目后通过 `backlog update --fixed` 标记 |
-| `backlog stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映 |
+| `backlog list --status todo` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后自动 `backlog update --fixed` 标记 |
+| `backlog stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
 
 ## 项目速览
 
