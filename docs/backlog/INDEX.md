@@ -1,14 +1,14 @@
 # Backlog Index
 
-> Auto-generated — 2026-04-27
-> Total items: 7
+> Auto-generated — 2026-05-11
+> Total items: 11
 
 ## Status
 
 - ⬜ **todo**: 4
 - 🔄 **in_progress**: 0
 - 🚫 **blocked**: 0
-- ✅ **done**: 3
+- ✅ **done**: 7
 - ❌ **cancelled**: 0
 
 ## By Priority
@@ -16,8 +16,8 @@
 | Priority | Count |
 |----------|-------|
 | P0 | 0 |
-| P1 | 2 |
-| P2 | 4 |
+| P1 | 4 |
+| P2 | 6 |
 | P3 | 1 |
 
 ## Recommended Next (by score)

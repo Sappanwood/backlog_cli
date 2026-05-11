@@ -39,15 +39,22 @@ uv run --directory ~/ai/backlog-cli backlog --dir <项目路径> <子命令>
 | 按优先级过滤 | `list --priority P0,P1 --status todo` |
 | 按分类过滤 | `list -c bug --status todo` |
 | 查看推荐做啥 | `next -n 5` |
+| 查看推荐 (JSON) | `next -n 5 --json` |
 | 查看完整条目 | `show <ID>` |
 | 开始做一条 | `update <ID> -s in_progress` |
 | 标记完成 | `update <ID> --fixed` |
 | 取消/关闭 | `update <ID> -s cancelled` |
+| 设置依赖关系 | `update <ID> --depends-on INK-001,INK-002` |
 | 为项目新增条目 | `add -p <project> -t "标题" -c <category> --priority P1 -b "一句话描述" [-e S] [-i high]` |
+| 新增条目(多行正文) | `add -p <project> -t "标题" -c <category> --priority P1 --body-file /tmp/body.md` |
+| 通过管道新增 | `cat body.md \| backlog add ... --stdin` |
 | 更新条目字段 | `update <ID> --title "新标题" --priority P2 [-b "更新后的描述"]` |
+| 替换正文(文件) | `update <ID> --body-file /tmp/body.md` |
+| 替换正文(管道) | `cat body.md \| backlog update <ID> --stdin` |
+| 编辑正文(管道) | `cat body.md \| backlog edit <ID> --stdin` |
 | 查看统计 | `stats` |
 | 生成总览索引 | `index` |
-| 编辑正文 | `edit <ID>` |
+| 编辑正文(交互) | `edit <ID>` |
 
 ## 3. 数据模型
 
@@ -96,8 +103,13 @@ score = priority_weight × impact_weight × effort_weight
 - **ID 自动生成**：格式为 `<项目名前3字母大写>-<三位序号>`，如 zhijian→ZHI-001, inkborn→INK-001
 - **更新字段**：`update` 只修改你明确传入的字段，其余保持不变
 - **`--fixed` 是快捷方式**：等于 `-s done` + 自动填写 `fixed_at`
-- **正文写作**：用 `-b "markdown内容"` 或之后用 `edit <ID>` 打开编辑器补充详细正文
-- **JSON 输出**：`list --json` 可获得结构化数据供程序消费
+- **正文写作**：
+  - 单行简短描述：`-b "一句话描述"` 即可
+  - 多行正文：用 `--body-file /tmp/body.md` 或 Heredoc + `--stdin`
+  - 示例：`cat <<'EOF' | backlog add -p myproj -t "标题" -c feature --priority P1 --stdin ... EOF`
+  - **禁止**：试图通过 `-b "line1\nline2"` 传递多行 — `\n` 不会被 shell 展开
+- **非 TTY 环境**：`edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`
+- **`next --json`**：返回与 `list --json` 一致的结构化输出，供 Agent 解析推荐列表
 
 ## 6. 跨项目使用
 
@@ -126,8 +138,25 @@ done
 uv run --directory ~/ai/backlog-cli backlog --dir <project_path> update <ID> --fixed && \
 uv run --directory ~/ai/backlog-cli backlog --dir <project_path> index
 
-# 新增条目（含描述）
-uv run --directory ~/ai/backlog-cli backlog --dir <project_path> add \
-  -p <project> -t "标题" -c <category> --priority P1 \
-  -b "一句话描述：为什么做、做什么、怎么算完成"
+# 新增条目（含多行正文 — Heredoc + --stdin）
+cat <<'EOF' | uv run --directory ~/ai/backlog-cli backlog --dir <project_path> add \
+  -p <project> -t "标题" -c <category> --priority P1 -e S -i high --stdin
+## 背景
+
+为什么要做这条。
+
+## 目标
+
+- 具体做什么
+- 如何验证完成
+EOF
+
+# 替换正文（管道）
+cat /tmp/new-body.md | uv run --directory ~/ai/backlog-cli backlog --dir <project_path> edit <ID> --stdin
+
+# 设置前置依赖
+uv run --directory ~/ai/backlog-cli backlog --dir <project_path> update <ID> --depends-on INK-001,INK-002
+
+# 获取推荐列表 JSON
+uv run --directory ~/ai/backlog-cli backlog --dir <project_path> next -n 3 --json
 ```

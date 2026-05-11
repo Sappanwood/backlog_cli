@@ -161,7 +161,8 @@ def update_item(
             current_data[key] = _jsonify(value)
 
     current_data["updated"] = date.today().isoformat()
-    current_data.pop("body", None)
+
+    body = current_data.pop("body", body)
 
     post = frontmatter.Post(body, **current_data)
     filepath.write_text(frontmatter.dumps(post))

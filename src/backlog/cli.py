@@ -1,6 +1,7 @@
 """CLI entry point using typer and rich."""
 
 import os
+import sys
 from datetime import date
 from pathlib import Path
 from typing import Annotated
@@ -32,7 +33,7 @@ def main(
     ] = None,
 ):
     global _project_dir
-    _project_dir = dir
+    _project_dir = dir.resolve() if dir else None
 
 
 def _project_path() -> Path:
@@ -86,6 +87,27 @@ def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
     console.print(f"[dim]Total: {len(items)} items[/dim]")
 
 
+def _output_items(items: list[BacklogItem], json_output: bool, show_score: bool = False) -> None:
+    """Unified output: JSON or Rich table."""
+    if json_output:
+        import json
+        console.print(json.dumps([i.model_dump(mode="json") for i in items], indent=2))
+    else:
+        _print_table(items, show_score=show_score)
+
+
+def _resolve_body(body_str: str | None, body_file: Path | None, stdin: bool) -> str | None:
+    """Resolve body from one of three mutually exclusive sources.  Returns None when no source is specified."""
+    sources = sum([body_str is not None, body_file is not None, stdin])
+    if sources > 1:
+        raise typer.BadParameter("Only one of --body / -b, --body-file, --stdin may be used")
+    if stdin:
+        return sys.stdin.read()
+    if body_file is not None:
+        return body_file.read_text()
+    return body_str
+
+
 @app.command(name="list")
 def list_cmd(
     project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
@@ -122,11 +144,7 @@ def list_cmd(
     if limit > 0:
         items = items[:limit]
 
-    if json_output:
-        import json
-        console.print(json.dumps([i.model_dump(mode="json") for i in items], indent=2))
-    else:
-        _print_table(items, show_score=(sort == "score"))
+    _output_items(items, json_output=json_output, show_score=(sort == "score"))
 
 
 @app.command()
@@ -186,12 +204,15 @@ def add(
     tags: str = typer.Option("", "--tags", help="Comma-separated tags"),
     source: str = typer.Option("", "--source", help="Source label"),
     depends_on: str = typer.Option("", "--depends-on", help="Comma-separated dependency IDs"),
-    body: str = typer.Option("", "--body", "-b", help="Description body (markdown)"),
+    body: str | None = typer.Option(None, "--body", "-b", help="Description body (markdown)"),
+    body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
+    stdin: bool = typer.Option(False, "--stdin", help="Read body from stdin"),
 ):
     """Add a new backlog item."""
     item_id = next_id(project, _project_path())
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     dep_list = [d.strip() for d in depends_on.split(",") if d.strip()]
+    body_content = _resolve_body(body, body_file, stdin) or ""
 
     item = BacklogItem(
         id=item_id,
@@ -204,7 +225,7 @@ def add(
         tags=tag_list,
         source=source,
         depends_on=dep_list,
-        body=body,
+        body=body_content,
     )
     filepath = add_item(item, _project_path())
     console.print(f"[green]Created[/green] {item_id} → {filepath}")
@@ -222,11 +243,15 @@ def update(
     status: Status | None = typer.Option(None, "--status", "-s", help="New status"),
     tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags (replaces)"),
     source: str | None = typer.Option(None, "--source", help="New source label"),
+    depends_on: str | None = typer.Option(None, "--depends-on", help="Comma-separated dependency IDs (replaces)"),
     fixed: bool = typer.Option(False, "--fixed", "-f", help="Mark as done with today's date (shorthand)"),
     body: str | None = typer.Option(None, "--body", "-b", help="New body text"),
+    body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
+    stdin: bool = typer.Option(False, "--stdin", help="Read body from stdin"),
 ):
     """Update a backlog item."""
     updates: dict = {}
+    body_content = _resolve_body(body, body_file, stdin)
 
     if title is not None:
         updates["title"] = title
@@ -244,8 +269,10 @@ def update(
         updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
     if source is not None:
         updates["source"] = source
-    if body is not None:
-        updates["body"] = body
+    if depends_on is not None:
+        updates["depends_on"] = [d.strip() for d in depends_on.split(",") if d.strip()]
+    if body_content is not None:
+        updates["body"] = body_content
     if fixed:
         updates["status"] = Status.DONE
         updates["fixed_at"] = date.today()
@@ -326,6 +353,7 @@ def stats(
 def next_cmd(
     project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     limit: int = typer.Option(5, "--limit", "-n", help="Number of items to show"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show recommended next items sorted by priority score."""
     items = list_items(_project_path())
@@ -340,7 +368,7 @@ def next_cmd(
         console.print("[dim]No active items to recommend.[/dim]")
         return
 
-    _print_table(active, show_score=True)
+    _output_items(active, json_output=json_output, show_score=True)
 
 
 @app.command()
@@ -358,13 +386,29 @@ def index(
 @app.command()
 def edit(
     item_id: str = typer.Argument(..., help="Item ID to edit"),
+    stdin: bool = typer.Option(False, "--stdin", help="Replace body from stdin"),
 ):
-    """Open a backlog item in $EDITOR."""
+    """Open a backlog item in $EDITOR, or replace body via --stdin."""
     items_dir = _project_path() / "docs" / "backlog" / "items"
     filepath = items_dir / f"{item_id}.md"
     if not filepath.exists():
         console.print(f"[red]Item '{item_id}' not found.[/red]")
         raise typer.Exit(1)
+
+    if stdin:
+        new_body = sys.stdin.read()
+        result = update_item(item_id, {"body": new_body}, _project_path())
+        if result is None:
+            console.print(f"[red]Item '{item_id}' not found.[/red]")
+            raise typer.Exit(1)
+        console.print(f"[green]Updated[/green] {item_id} body from stdin")
+        return
+
+    if not sys.stdout.isatty():
+        console.print("[red]stdout is not a TTY: cannot open editor.[/red]")
+        console.print("[dim]Use --stdin to pipe content, or use update --body/--body-file/--stdin[/dim]")
+        raise typer.Exit(1)
+
     editor = os.environ.get("EDITOR", "vim")
     os.system(f"{editor} {filepath}")
 

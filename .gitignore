@@ -1,1 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+.venv/
+
+# Build / distribution
+dist/
+build/
+*.egg-info/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Lint / typecheck
+.ruff_cache/
+
+# Backlog items — local only, index is tracked
 docs/backlog/items/
