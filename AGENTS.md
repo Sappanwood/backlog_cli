@@ -1,6 +1,8 @@
 # AGENT.md — Backlog CLI 开发路由中枢
 
-> 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具，系统 skill `backlog` 已自动装载合约内容，也可阅读 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md)。
+> 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具：
+> - 系统 skill `backlog`（薄层代理，位于 `~/.config/opencode/skills/backlog/SKILL.md`）自动装载调用范式和自动行为规则
+> - 然后指示读取 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) 获取完整命令、字段、约定 — **该文档是单一源头**
 
 ## 绝对红线
 
