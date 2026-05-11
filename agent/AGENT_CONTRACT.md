@@ -108,6 +108,7 @@ score = priority_weight × impact_weight × effort_weight
   - 多行正文：用 `--body-file /tmp/body.md` 或 Heredoc + `--stdin`
   - 示例：`cat <<'EOF' | backlog add -p myproj -t "标题" -c feature --priority P1 --stdin ... EOF`
   - **禁止**：试图通过 `-b "line1\nline2"` 传递多行 — `\n` 不会被 shell 展开
+  - **通道安全**：`--stdin` 和 `--body-file` 为二进制安全通道，可安全传递任意 Markdown（含代码块、ASCII 表格、反引号 `` ` ``、管道符 `|` 等特殊字符）。`-b` 走 shell 参数解析，特殊字符需转义，仅适用于单行纯文本
 - **非 TTY 环境**：`edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`
 - **`next --json`**：返回与 `list --json` 一致的结构化输出，供 Agent 解析推荐列表
 
