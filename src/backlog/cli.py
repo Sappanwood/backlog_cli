@@ -91,7 +91,7 @@ def _output_items(items: list[BacklogItem], json_output: bool, show_score: bool 
     """Unified output: JSON or Rich table."""
     if json_output:
         import json
-        console.print(json.dumps([i.model_dump(mode="json") for i in items], indent=2))
+        print(json.dumps([i.model_dump(mode="json") for i in items], indent=2))
     else:
         _print_table(items, show_score=show_score)
 
@@ -292,6 +292,7 @@ def update(
 @app.command()
 def stats(
     project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show backlog statistics."""
     items = list_items(_project_path())
@@ -299,7 +300,14 @@ def stats(
         items = [i for i in items if i.project == project]
 
     if not items:
-        console.print("[dim]No items.[/dim]")
+        if json_output:
+            import json
+            print(json.dumps({
+                "total": 0, "active": 0, "done": 0,
+                "by_status": {}, "by_priority": {}, "by_category": {},
+            }))
+        else:
+            console.print("[dim]No items.[/dim]")
         return
 
     by_status: dict[str, int] = {}
@@ -313,6 +321,18 @@ def stats(
     total = len(items)
     active = sum(1 for i in items if i.status in (Status.TODO, Status.IN_PROGRESS, Status.BLOCKED))
     done = sum(1 for i in items if i.status == Status.DONE)
+
+    if json_output:
+        import json
+        print(json.dumps({
+            "total": total,
+            "active": active,
+            "done": done,
+            "by_status": by_status,
+            "by_priority": by_priority,
+            "by_category": by_category,
+        }, indent=2))
+        return
 
     console.print(f"[bold]Total:[/bold] {total}  |  [bold]Active:[/bold] {active}  |  [bold]Done:[/bold] {done}")
     console.print()

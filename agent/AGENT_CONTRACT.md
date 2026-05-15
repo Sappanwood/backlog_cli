@@ -53,6 +53,7 @@ uv run --directory ~/ai/backlog-cli backlog --dir <项目路径> <子命令>
 | 替换正文(管道) | `cat body.md \| backlog update <ID> --stdin` |
 | 编辑正文(管道) | `cat body.md \| backlog edit <ID> --stdin` |
 | 查看统计 | `stats` |
+| 查看统计 (JSON) | `stats --json` |
 | 生成总览索引 | `index` |
 | 编辑正文(交互) | `edit <ID>` |
 
