@@ -3,7 +3,7 @@
 from datetime import date
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 class Priority(StrEnum):
@@ -90,6 +90,13 @@ class BacklogItem(BaseModel):
     updated: date = Field(default_factory=lambda: date.today())
     body: str = ""
 
+    @model_validator(mode="after")
+    def clear_fixed_at_unless_done(self) -> "BacklogItem":
+        if self.status != Status.DONE:
+            self.fixed_at = None
+        return self
+
+    @computed_field
     @property
     def score(self) -> float:
         if self.status in (Status.DONE, Status.CANCELLED):

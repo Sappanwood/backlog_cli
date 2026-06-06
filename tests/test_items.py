@@ -99,6 +99,7 @@ class TestGetItemsDir:
     def test_creates_when_missing(self, tmp_path):
         items_dir = get_items_dir(tmp_path)
         assert items_dir.exists()
+        assert items_dir == tmp_path / "docs" / "backlog" / "items"
         assert items_dir.name == "items"
 
     def test_reuses_existing(self, tmp_path):
@@ -133,7 +134,14 @@ class TestLoadItem:
 
     def test_date_fields_parsed(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "TST-001", created="2026-01-15", updated="2026-04-01", fixed_at="2026-03-15")
+        _write_item(
+            items_dir,
+            "TST-001",
+            created="2026-01-15",
+            updated="2026-04-01",
+            status="done",
+            fixed_at="2026-03-15",
+        )
         filepath = items_dir / "TST-001.md"
         item = _load_item(filepath)
         assert item is not None
@@ -144,6 +152,14 @@ class TestLoadItem:
     def test_fixed_at_none_when_not_set(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
         _write_item(items_dir, "TST-001", fixed_at=None)
+        filepath = items_dir / "TST-001.md"
+        item = _load_item(filepath)
+        assert item is not None
+        assert item.fixed_at is None
+
+    def test_fixed_at_cleared_when_not_done(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001", status="todo", fixed_at="2026-03-15")
         filepath = items_dir / "TST-001.md"
         item = _load_item(filepath)
         assert item is not None
@@ -269,6 +285,15 @@ class TestUpdateItem:
         result = update_item("TST-001", {"title": "X"}, tmp_path)
         assert result is not None
         assert result.updated == date.today()
+
+    def test_clears_fixed_at_when_reopened(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001", status="done", fixed_at="2026-03-15")
+        result = update_item("TST-001", {"status": Status.TODO}, tmp_path)
+        assert result is not None
+        assert result.status == Status.TODO
+        assert result.fixed_at is None
+        assert "fixed_at" not in (items_dir / "TST-001.md").read_text()
 
 
 class TestApplyDependencyBlocking:

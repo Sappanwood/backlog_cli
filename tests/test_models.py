@@ -115,7 +115,7 @@ class TestBacklogItem:
             priority=Priority.P0,
             effort=Effort.XS,
             impact=Impact.HIGH,
-            status=Status.IN_PROGRESS,
+            status=Status.DONE,
             source="github",
             fixed_at=today,
             tags=["urgent", "frontend"],
@@ -126,7 +126,7 @@ class TestBacklogItem:
         )
         assert item.effort == Effort.XS
         assert item.impact == Impact.HIGH
-        assert item.status == Status.IN_PROGRESS
+        assert item.status == Status.DONE
         assert item.source == "github"
         assert item.fixed_at == today
         assert item.tags == ["urgent", "frontend"]
@@ -146,6 +146,18 @@ class TestBacklogItem:
                 id="X", project="x", title="x",
                 category="not_a_category", priority=Priority.P1,  # pyright: ignore[reportArgumentType]
             )
+
+    def test_fixed_at_cleared_unless_done(self):
+        item = BacklogItem(
+            id="TST-004",
+            project="test",
+            title="Reopened item",
+            category=Category.BUG,
+            priority=Priority.P1,
+            status=Status.IN_PROGRESS,
+            fixed_at=date.today(),
+        )
+        assert item.fixed_at is None
 
 
 class TestScore:

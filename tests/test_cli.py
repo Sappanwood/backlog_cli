@@ -96,6 +96,7 @@ class TestListCommand:
         data = json.loads(result.stdout)
         assert len(data) == 1
         assert data[0]["id"] == "TST-001"
+        assert data[0]["score"] == 40.0
 
     def test_list_sort_by_id(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
@@ -272,6 +273,16 @@ class TestNextCommand:
         assert result.exit_code == 0
         assert "TST-001" in result.stdout
 
+    def test_next_json_includes_score(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001", status="todo", priority="P1", impact="high", effort="XS")
+        result = runner.invoke(app, [*_dir_flag(project_path), "next", "--json"])
+        assert result.exit_code == 0
+        data = json.loads(result.stdout)
+        assert data[0]["id"] == "TST-001"
+        assert data[0]["score"] == 1500.0
+
     def test_next_skips_blocked(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
         items_dir = project_path / "docs" / "backlog" / "items"
@@ -303,10 +314,11 @@ class TestEditCommand:
         result = runner.invoke(app, [*_dir_flag(project_path), "edit", "TST-999"])
         assert result.exit_code == 1
 
-    def test_edit_exists(self, runner, tmp_path, monkeypatch):
+    def test_edit_requires_tty_without_stdin(self, runner, tmp_path, monkeypatch):
         project_path = _make_backlog(tmp_path)
         items_dir = project_path / "docs" / "backlog" / "items"
         _write_item(items_dir, "TST-001")
         monkeypatch.setenv("EDITOR", "cat")
         result = runner.invoke(app, [*_dir_flag(project_path), "edit", "TST-001"])
-        assert result.exit_code == 0
+        assert result.exit_code == 1
+        assert "stdout is not a TTY" in result.stdout

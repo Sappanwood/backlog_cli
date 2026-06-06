@@ -14,7 +14,7 @@
   "projects": {
     "inkborn": { "path": "~/inkborn",              "backlog_prefix": "INK", ... },
     "zhijian": { "path": "~/ai/ZhiJian",           "backlog_prefix": "ZHI", ... },
-    "backlog-cli": { "path": "~/ai/backlog-cli",   "backlog_prefix": "BCK", ... }
+    "backlog-cli": { "path": "~/ai/backlog-cli",   "backlog_prefix": "BAC", ... }
   }
 }
 ```
@@ -29,7 +29,8 @@
 uv run --directory ~/ai/backlog-cli backlog --dir <项目路径> <子命令>
 ```
 
-`--dir` 指定目标项目根目录（必须包含或能自动创建 `docs/backlog/`）。
+`--dir` 指定目标项目根目录。若该目录或其父级已有 `docs/backlog/`，工具会复用；
+否则会在 `--dir` 指向的目录下创建 `docs/backlog/`。
 
 ## 2. 命令速查
 
@@ -64,14 +65,14 @@ id: "ZHI-001"          # 自动生成：项目名前3字母大写 + 三位序号
 project: "zhijian"     # 项目标识
 title: "标题"
 category: feature      # bug | a11y | ux | i18n | testing | feature | refactor | perf | docs | architecture | security | research | ops
-priority: P1           # P0(阻塞) > P1(严重) > P2(中等) > P3(低)
+priority: P1           # P0(最高/影响发布) > P1(严重) > P2(中等) > P3(低)
 effort: M              # XS | S | M | L | XL
 impact: high           # high | medium | low
 status: todo           # todo | in_progress | done | cancelled | blocked
 source: ""             # 来源标签（如 ui-audit-2026-04-27）
 tags: [tag1, tag2]
 depends_on: []         # 前置依赖的条目 ID
-fixed_at: null         # 完成日期（--fixed 自动设为今天）
+fixed_at: null         # 完成日期；仅 status=done 时有效（--fixed 自动设为今天）
 created: "2026-04-27"
 updated: "2026-04-27"
 ```
@@ -95,7 +96,11 @@ score = priority_weight × impact_weight × effort_weight
 | P3 | 1 | | | L | 1.0 |
 | | | | | XL | 0.5 |
 
-高影响 + 小工作量的条目排最前。done/cancelled 条目 score=0，自动排除。
+高影响 + 小工作量的条目排最前。done/cancelled 条目 score=0。
+
+- `list --sort score`：按 score 展示所有匹配条目，包含 `blocked`
+- `next`：只推荐 `todo` / `in_progress`，排除 `blocked`、`done`、`cancelled`
+- `list --json` 与 `next --json`：每个条目包含 `score` 字段，供 Agent 解释推荐依据
 
 ## 5. 操作约定
 
@@ -104,6 +109,7 @@ score = priority_weight × impact_weight × effort_weight
 - **ID 自动生成**：格式为 `<项目名前3字母大写>-<三位序号>`，如 zhijian→ZHI-001, inkborn→INK-001
 - **更新字段**：`update` 只修改你明确传入的字段，其余保持不变
 - **`--fixed` 是快捷方式**：等于 `-s done` + 自动填写 `fixed_at`
+- **状态机约束**：`fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`
 - **正文写作**：
   - 单行简短描述：`-b "一句话描述"` 即可
   - 多行正文：用 `--body-file /tmp/body.md` 或 Heredoc + `--stdin`

@@ -1,4 +1,4 @@
-# AGENT.md — Backlog CLI 开发路由中枢
+# AGENTS.md — Backlog CLI 开发路由中枢
 
 > 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具：
 > - 系统 skill `backlog`（薄层代理，位于 `~/.config/opencode/skills/backlog/SKILL.md`）自动装载调用范式和自动行为规则

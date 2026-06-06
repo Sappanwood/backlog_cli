@@ -1,7 +1,7 @@
 # Backlog Index
 
-> Auto-generated — 2026-05-13
-> Total items: 11
+> Auto-generated — 2026-05-23
+> Total items: 12
 
 ## Status
 
@@ -9,13 +9,13 @@
 - 🔄 **in_progress**: 0
 - 🚫 **blocked**: 0
 - ✅ **done**: 7
-- ❌ **cancelled**: 0
+- ❌ **cancelled**: 1
 
 ## By Priority
 
 | Priority | Count |
 |----------|-------|
-| P0 | 0 |
+| P0 | 1 |
 | P1 | 4 |
 | P2 | 6 |
 | P3 | 1 |

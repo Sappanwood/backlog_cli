@@ -26,7 +26,8 @@ def get_items_dir(project_path: Path | None = None) -> Path:
     """Return the items directory, creating it if needed."""
     base = _find_backlog_dir(project_path)
     if base is None:
-        base = Path.cwd() / "docs" / "backlog"
+        root = project_path if project_path is not None else Path.cwd()
+        base = root / "docs" / "backlog"
     items_dir = base / ITEMS_DIRNAME
     items_dir.mkdir(parents=True, exist_ok=True)
     return items_dir
@@ -119,7 +120,7 @@ def add_item(item: BacklogItem, project_path: Path | None = None) -> Path:
     items_dir = get_items_dir(project_path)
     metadata = item.model_dump(
         mode="json",
-        exclude={"body"},
+        exclude={"body", "score"},
         exclude_none=True,
     )
     post = frontmatter.Post(item.body, **metadata)
@@ -154,11 +155,14 @@ def update_item(
         return None
 
     body = current.body
-    current_data = current.model_dump(mode="json", exclude={"body"})
+    current_data = current.model_dump(mode="json", exclude={"body", "score"}, exclude_none=True)
 
     for key, value in updates.items():
         if value is not None:
             current_data[key] = _jsonify(value)
+
+    if current_data.get("status") != Status.DONE.value:
+        current_data.pop("fixed_at", None)
 
     current_data["updated"] = date.today().isoformat()
 

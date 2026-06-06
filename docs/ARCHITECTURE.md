@@ -59,7 +59,11 @@ Markdown 正文（body）
 
 ### 项目发现流程
 
-`_find_backlog_dir(start)` 从指定目录向上逐级查找 `docs/backlog/`，找到即返回。未找到则在当前目录下创建。
+`_find_backlog_dir(start)` 从指定目录向上逐级查找 `docs/backlog/`，找到即返回。
+`get_items_dir(project_path)` 未找到时的创建位置取决于调用方式：
+
+- 显式传入 `project_path`：在该路径下创建 `docs/backlog/items/`
+- 未传入 `project_path`：在当前工作目录下创建 `docs/backlog/items/`
 
 ### 推荐排序
 
@@ -67,7 +71,8 @@ Markdown 正文（body）
 score = priority_weight × impact_weight × effort_weight
 ```
 
-done/cancelled 条目 score=0，自动排除。
+done/cancelled 条目 score=0。`next` 只推荐 todo/in_progress；`list --sort score`
+仍可显示 blocked 条目的 score。
 
 ## 模块接口
 
