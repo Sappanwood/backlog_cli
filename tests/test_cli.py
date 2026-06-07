@@ -94,9 +94,10 @@ class TestListCommand:
         result = runner.invoke(app, [*_dir_flag(project_path), "list", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
-        assert len(data) == 1
-        assert data[0]["id"] == "TST-001"
-        assert data[0]["score"] == 40.0
+        assert data["ok"] is True
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "TST-001"
+        assert data["data"][0]["score"] == 40.0
 
     def test_list_sort_by_id(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
@@ -189,6 +190,9 @@ class TestAddCommand:
 
     def test_add_with_deps(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "A")
+        _write_item(items_dir, "B")
         result = runner.invoke(app, [
             *(_dir_flag(project_path)),
             "add",
@@ -280,8 +284,9 @@ class TestNextCommand:
         result = runner.invoke(app, [*_dir_flag(project_path), "next", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.stdout)
-        assert data[0]["id"] == "TST-001"
-        assert data[0]["score"] == 1500.0
+        assert data["ok"] is True
+        assert data["data"][0]["id"] == "TST-001"
+        assert data["data"][0]["score"] == 1500.0
 
     def test_next_skips_blocked(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
@@ -322,3 +327,67 @@ class TestEditCommand:
         result = runner.invoke(app, [*_dir_flag(project_path), "edit", "TST-001"])
         assert result.exit_code == 1
         assert "stdout is not a TTY" in result.stdout
+
+
+class TestListValidationAndFormats:
+    def test_invalid_priority_raises(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        result = runner.invoke(app, [*_dir_flag(project_path), "list", "--priority", "P9"])
+        assert result.exit_code == 2  # Typer bad parameter exit code is usually 2
+        assert "Invalid priority" in result.output
+
+    def test_invalid_sort_raises(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        result = runner.invoke(app, [*_dir_flag(project_path), "list", "--sort", "nonsense"])
+        assert result.exit_code == 2
+        assert "Sort option must be one of" in result.output
+
+    def test_format_csv(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001", project="test", title="Hello CSV", priority="P0", status="todo")
+        result = runner.invoke(app, [*_dir_flag(project_path), "list", "--format", "csv"])
+        assert result.exit_code == 0
+        assert "id,status,priority,title,category,effort,impact,score" in result.output
+        assert "TST-001,todo,P0,Hello CSV" in result.output
+
+
+class TestUpdateValidation:
+    def test_mutual_exclusion_fixed_status(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001")
+        result = runner.invoke(app, [
+            *_dir_flag(project_path), "update", "TST-001", "--status", "cancelled", "--fixed"
+        ])
+        assert result.exit_code == 2
+        assert "Cannot set both --fixed and a non-done --status" in result.output
+
+
+class TestNextCmdRefactoring:
+    def test_invalid_status_raises(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        result = runner.invoke(app, [*_dir_flag(project_path), "next", "--status", "blocked"])
+        assert result.exit_code == 2
+        assert "Only 'todo' or 'in_progress' status can be recommended" in result.output
+
+    def test_status_filters_todo_correctly(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        # 写入一个 todo，和一个 in_progress
+        _write_item(items_dir, "TST-001", status="todo", priority="P1")
+        _write_item(items_dir, "TST-002", status="in_progress", priority="P1")
+        
+        # next 默认应该推荐 todo，不含 in_progress
+        result = runner.invoke(app, [*_dir_flag(project_path), "next"])
+        assert result.exit_code == 0
+        assert "TST-001" in result.stdout
+        assert "TST-002" not in result.stdout
+
+        # next --status in_progress 应该推荐 in_progress，不含 todo
+        result_ip = runner.invoke(app, [*_dir_flag(project_path), "next", "--status", "in_progress"])
+        assert_ip_success = result_ip.exit_code == 0
+        assert assert_ip_success
+        assert "TST-002" in result_ip.stdout
+        assert "TST-001" not in result_ip.stdout
+

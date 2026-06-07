@@ -1,9 +1,11 @@
 """Backlog data models."""
 
+import re
 from datetime import date
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 
 class Priority(StrEnum):
@@ -89,6 +91,22 @@ class BacklogItem(BaseModel):
     created: date = Field(default_factory=lambda: date.today())
     updated: date = Field(default_factory=lambda: date.today())
     body: str = ""
+    is_blocked: bool = Field(default=False, exclude=True)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError("ID can only contain alphanumeric characters, hyphens, and underscores")
+        return v
+
+    @field_validator("project")
+    @classmethod
+    def validate_project(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError("Project name can only contain alphanumeric characters, hyphens, and underscores")
+        return v
 
     @model_validator(mode="after")
     def clear_fixed_at_unless_done(self) -> "BacklogItem":
@@ -98,8 +116,15 @@ class BacklogItem(BaseModel):
 
     @computed_field
     @property
+    def effective_status(self) -> Status:
+        if self.is_blocked:
+            return Status.BLOCKED
+        return self.status
+
+    @computed_field
+    @property
     def score(self) -> float:
-        if self.status in (Status.DONE, Status.CANCELLED):
+        if self.effective_status in (Status.DONE, Status.CANCELLED):
             return 0.0
         return (
             PRIORITY_WEIGHT[self.priority]

@@ -10,7 +10,18 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .items import add_item, generate_index, list_items, next_id, show_item, update_item
+from .items import (
+    INDEX_FILENAME,
+    BacklogItemParseError,
+    add_item,
+    generate_index,
+    get_backlog_dir,
+    get_item_filepath,
+    list_items,
+    next_id,
+    show_item,
+    update_item,
+)
 from .models import (
     BacklogItem,
     Category,
@@ -23,6 +34,30 @@ from .models import (
 app = typer.Typer(help="Unified backlog manager")
 console = Console()
 _project_dir: Path | None = None
+
+
+def _print_json_success(data: dict | list, warnings: list[str] | None = None) -> None:
+    import json
+    output = {
+        "ok": True,
+        "data": data,
+    }
+    if warnings is not None:
+        output["warnings"] = warnings
+    print(json.dumps(output, indent=2))
+
+
+def _print_json_error(code: str, message: str, details: dict | None = None) -> None:
+    import json
+    output = {
+        "ok": False,
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details or {},
+        }
+    }
+    print(json.dumps(output, indent=2))
 
 
 @app.callback()
@@ -68,11 +103,11 @@ def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
             Status.BLOCKED: "🚫",
             Status.DONE: "✅",
             Status.CANCELLED: "❌",
-        }.get(item.status, "?")
+        }.get(item.effective_status, "?")
 
         row = [
             item.id,
-            f"{status_icon} {item.status.value}",
+            f"{status_icon} {item.effective_status.value}",
             item.priority.value,
             item.title[:60],
             item.category.value,
@@ -87,11 +122,30 @@ def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
     console.print(f"[dim]Total: {len(items)} items[/dim]")
 
 
-def _output_items(items: list[BacklogItem], json_output: bool, show_score: bool = False) -> None:
-    """Unified output: JSON or Rich table."""
-    if json_output:
-        import json
-        print(json.dumps([i.model_dump(mode="json") for i in items], indent=2))
+def _print_csv(items: list[BacklogItem]) -> None:
+    import csv
+    import sys
+    writer = csv.writer(sys.stdout)
+    writer.writerow(["id", "status", "priority", "title", "category", "effort", "impact", "score"])
+    for item in items:
+        writer.writerow([
+            item.id,
+            item.effective_status.value,
+            item.priority.value,
+            item.title,
+            item.category.value,
+            item.effort.value,
+            item.impact.value,
+            int(item.score),
+        ])
+
+
+def _output_items(items: list[BacklogItem], format: str, show_score: bool = False) -> None:
+    """Unified output: JSON, CSV, or Rich table."""
+    if format == "json":
+        _print_json_success([i.model_dump(mode="json") for i in items])
+    elif format == "csv":
+        _print_csv(items)
     else:
         _print_table(items, show_score=show_score)
 
@@ -117,18 +171,42 @@ def list_cmd(
     tag: str | None = typer.Option(None, "--tag", "-t", help="Filter by tag"),
     sort: str = typer.Option("score", "--sort", help="Sort by: score, priority, id"),
     limit: int = typer.Option(0, "--limit", "-n", help="Limit results"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    format: str = typer.Option("table", "--format", help="Output format: json, table, csv"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON (deprecated)"),
 ):
     """List backlog items with optional filters."""
-    items = list_items(_project_path())
+    if format not in ("json", "table", "csv"):
+        raise typer.BadParameter("Format must be one of: json, table, csv")
+    if json_output:
+        format = "json"
+
+    if sort not in ("score", "priority", "id"):
+        raise typer.BadParameter("Sort option must be one of: score, priority, id")
+
+    allowed_priorities = None
+    if priority:
+        allowed_priorities = []
+        for p in priority.split(","):
+            p_strip = p.strip().upper()
+            if p_strip not in Priority.__members__:
+                raise typer.BadParameter(f"Invalid priority: '{p}'")
+            allowed_priorities.append(Priority[p_strip])
+
+    try:
+        items = list_items(_project_path())
+    except BacklogItemParseError as e:
+        if format == "json":
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
 
     if project:
         items = [i for i in items if i.project == project]
     if category:
         items = [i for i in items if i.category == category]
-    if priority:
-        allowed = set(p.strip() for p in priority.split(","))
-        items = [i for i in items if i.priority.value in allowed]
+    if allowed_priorities is not None:
+        items = [i for i in items if i.priority in allowed_priorities]
     if status:
         items = [i for i in items if i.status == status]
     if tag:
@@ -144,18 +222,40 @@ def list_cmd(
     if limit > 0:
         items = items[:limit]
 
-    _output_items(items, json_output=json_output, show_score=(sort == "score"))
+    _output_items(items, format=format, show_score=(sort == "score"))
 
 
 @app.command()
 def show(
     item_id: str = typer.Argument(..., help="Item ID to show"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show full details of a backlog item."""
-    item = show_item(item_id, _project_path())
+    try:
+        item = show_item(item_id, _project_path())
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        if json_output:
+            _print_json_error("INVALID_INPUT", str(e))
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
     if item is None:
-        console.print(f"[red]Item '{item_id}' not found.[/red]")
+        if json_output:
+            _print_json_error("ITEM_NOT_FOUND", f"Item '{item_id}' not found.")
+        else:
+            console.print(f"[red]Item '{item_id}' not found.[/red]")
         raise typer.Exit(1)
+
+    if json_output:
+        _print_json_success(item.model_dump(mode="json"))
+        return
 
     console.print(
         f"[bold cyan]{item.id}[/bold cyan]  [red]{item.priority.value}[/red]  "
@@ -163,7 +263,7 @@ def show(
     )
     console.print(f"[bold white]{item.title}[/bold white]")
     console.print()
-    console.print(f"Status: [bold]{item.status.value}[/bold]")
+    console.print(f"Status: [bold]{item.effective_status.value}[/bold]")
     console.print(f"Effort: {item.effort.value}  |  Impact: {item.impact.value}  |  Score: {int(item.score)}")
     console.print(f"Project: {item.project}  |  Source: {item.source or '-'}")
     if item.tags:
@@ -177,13 +277,13 @@ def show(
             if dep is None:
                 dep_statuses.append(f"[red]{dep_id} (missing)[/red]")
                 has_blocking = True
-            elif dep.status == Status.DONE:
-                dep_statuses.append(f"[green]{dep_id} ({dep.status.value})[/green]")
+            elif dep.effective_status == Status.DONE:
+                dep_statuses.append(f"[green]{dep_id} ({dep.effective_status.value})[/green]")
             else:
-                dep_statuses.append(f"[red]{dep_id} ({dep.status.value})[/red]")
+                dep_statuses.append(f"[red]{dep_id} ({dep.effective_status.value})[/red]")
                 has_blocking = True
         console.print(f"Depends on: {', '.join(dep_statuses)}")
-        if item.status == Status.BLOCKED and has_blocking:
+        if item.effective_status == Status.BLOCKED and has_blocking:
             console.print("[yellow]Blocked: some dependencies are not done[/yellow]")
     console.print(f"Created: {item.created}  |  Updated: {item.updated}")
     if item.fixed_at:
@@ -207,27 +307,67 @@ def add(
     body: str | None = typer.Option(None, "--body", "-b", help="Description body (markdown)"),
     body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
     stdin: bool = typer.Option(False, "--stdin", help="Read body from stdin"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Add a new backlog item."""
-    item_id = next_id(project, _project_path())
+    try:
+        item_id = next_id(project, _project_path())
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        if json_output:
+            _print_json_error("INVALID_INPUT", str(e))
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     dep_list = [d.strip() for d in depends_on.split(",") if d.strip()]
     body_content = _resolve_body(body, body_file, stdin) or ""
 
-    item = BacklogItem(
-        id=item_id,
-        project=project,
-        title=title,
-        category=category,
-        priority=priority,
-        effort=effort,
-        impact=impact,
-        tags=tag_list,
-        source=source,
-        depends_on=dep_list,
-        body=body_content,
-    )
-    filepath = add_item(item, _project_path())
+    try:
+        item = BacklogItem(
+            id=item_id,
+            project=project,
+            title=title,
+            category=category,
+            priority=priority,
+            effort=effort,
+            impact=impact,
+            tags=tag_list,
+            source=source,
+            depends_on=dep_list,
+            body=body_content,
+        )
+        filepath = add_item(item, _project_path())
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except FileExistsError as e:
+        if json_output:
+            _print_json_error("ITEM_CONFLICT", str(e))
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        if json_output:
+            _print_json_error("INVALID_INPUT", str(e))
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        _print_json_success({
+            "id": item_id,
+            "filepath": str(filepath),
+        })
+        return
     console.print(f"[green]Created[/green] {item_id} → {filepath}")
     console.print(f"[bold white]{title}[/bold white]")
 
@@ -248,8 +388,11 @@ def update(
     body: str | None = typer.Option(None, "--body", "-b", help="New body text"),
     body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
     stdin: bool = typer.Option(False, "--stdin", help="Read body from stdin"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Update a backlog item."""
+    if fixed and status is not None and status != Status.DONE:
+        raise typer.BadParameter("Cannot set both --fixed and a non-done --status.")
     updates: dict = {}
     body_content = _resolve_body(body, body_file, stdin)
 
@@ -279,13 +422,37 @@ def update(
         updates.pop("fixed", None)
 
     if not updates:
-        console.print("[yellow]No updates specified.[/yellow]")
+        if json_output:
+            _print_json_error("INVALID_INPUT", "No updates specified.")
+        else:
+            console.print("[yellow]No updates specified.[/yellow]")
         raise typer.Exit(1)
 
-    result = update_item(item_id, updates, _project_path())
+    try:
+        result = update_item(item_id, updates, _project_path())
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        if json_output:
+            _print_json_error("INVALID_INPUT", str(e))
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
     if result is None:
-        console.print(f"[red]Item '{item_id}' not found.[/red]")
+        if json_output:
+            _print_json_error("ITEM_NOT_FOUND", f"Item '{item_id}' not found.")
+        else:
+            console.print(f"[red]Item '{item_id}' not found.[/red]")
         raise typer.Exit(1)
+
+    if json_output:
+        _print_json_success(result.model_dump(mode="json"))
+        return
     console.print(f"[green]Updated[/green] {item_id} — {result.title}")
 
 
@@ -295,17 +462,24 @@ def stats(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show backlog statistics."""
-    items = list_items(_project_path())
+    try:
+        items = list_items(_project_path())
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
     if project:
         items = [i for i in items if i.project == project]
 
     if not items:
         if json_output:
-            import json
-            print(json.dumps({
+            _print_json_success({
                 "total": 0, "active": 0, "done": 0,
                 "by_status": {}, "by_priority": {}, "by_category": {},
-            }))
+            })
         else:
             console.print("[dim]No items.[/dim]")
         return
@@ -314,24 +488,23 @@ def stats(
     by_category: dict[str, int] = {}
     by_priority: dict[str, int] = {}
     for item in items:
-        by_status[item.status.value] = by_status.get(item.status.value, 0) + 1
+        by_status[item.effective_status.value] = by_status.get(item.effective_status.value, 0) + 1
         by_category[item.category.value] = by_category.get(item.category.value, 0) + 1
         by_priority[item.priority.value] = by_priority.get(item.priority.value, 0) + 1
 
     total = len(items)
-    active = sum(1 for i in items if i.status in (Status.TODO, Status.IN_PROGRESS, Status.BLOCKED))
-    done = sum(1 for i in items if i.status == Status.DONE)
+    active = sum(1 for i in items if i.effective_status in (Status.TODO, Status.IN_PROGRESS, Status.BLOCKED))
+    done = sum(1 for i in items if i.effective_status == Status.DONE)
 
     if json_output:
-        import json
-        print(json.dumps({
+        _print_json_success({
             "total": total,
             "active": active,
             "done": done,
             "by_status": by_status,
             "by_priority": by_priority,
             "by_category": by_category,
-        }, indent=2))
+        })
         return
 
     console.print(f"[bold]Total:[/bold] {total}  |  [bold]Active:[/bold] {active}  |  [bold]Done:[/bold] {done}")
@@ -373,33 +546,70 @@ def stats(
 def next_cmd(
     project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     limit: int = typer.Option(5, "--limit", "-n", help="Number of items to show"),
+    status: Status = typer.Option(
+        Status.TODO, "--status", help="Filter by status (todo/in_progress)"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show recommended next items sorted by priority score."""
-    items = list_items(_project_path())
+    if status not in (Status.TODO, Status.IN_PROGRESS):
+        raise typer.BadParameter("Only 'todo' or 'in_progress' status can be recommended.")
+
+    try:
+        items = list_items(_project_path())
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
     if project:
         items = [i for i in items if i.project == project]
 
-    active = [i for i in items if i.status in (Status.TODO, Status.IN_PROGRESS) and i.score > 0]
+    active = [i for i in items if i.effective_status == status and i.score > 0]
     active.sort(key=lambda x: x.score, reverse=True)
     active = active[:limit]
 
+    format_str = "json" if json_output else "table"
+
     if not active:
-        console.print("[dim]No active items to recommend.[/dim]")
+        if json_output:
+            _print_json_success([])
+        else:
+            console.print(f"[dim]No active {status.value} items to recommend.[/dim]")
         return
 
-    _output_items(active, json_output=json_output, show_score=True)
+    _output_items(active, format=format_str, show_score=True)
 
 
 @app.command()
 def index(
     project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Generate docs/backlog/INDEX.md overview."""
-    content = generate_index(_project_path())
-    index_path = _project_path() / "docs" / "backlog" / "INDEX.md"
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    index_path.write_text(content)
+    try:
+        content = generate_index(_project_path(), project=project)
+        backlog_dir = get_backlog_dir(_project_path(), create=True)
+        index_path = backlog_dir / INDEX_FILENAME
+        index_path.write_text(content)
+    except BacklogItemParseError as e:
+        if json_output:
+            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        if json_output:
+            _print_json_error("INVALID_INPUT", str(e))
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        _print_json_success({"filepath": str(index_path)})
+        return
     console.print(f"[green]Generated[/green] {index_path}")
 
 
@@ -409,15 +619,25 @@ def edit(
     stdin: bool = typer.Option(False, "--stdin", help="Replace body from stdin"),
 ):
     """Open a backlog item in $EDITOR, or replace body via --stdin."""
-    items_dir = _project_path() / "docs" / "backlog" / "items"
-    filepath = items_dir / f"{item_id}.md"
+    try:
+        filepath = get_item_filepath(item_id, _project_path(), create=False)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
     if not filepath.exists():
         console.print(f"[red]Item '{item_id}' not found.[/red]")
         raise typer.Exit(1)
 
     if stdin:
         new_body = sys.stdin.read()
-        result = update_item(item_id, {"body": new_body}, _project_path())
+        try:
+            result = update_item(item_id, {"body": new_body}, _project_path())
+        except BacklogItemParseError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from e
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1) from e
         if result is None:
             console.print(f"[red]Item '{item_id}' not found.[/red]")
             raise typer.Exit(1)

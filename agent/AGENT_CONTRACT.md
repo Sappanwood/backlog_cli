@@ -110,6 +110,8 @@ score = priority_weight × impact_weight × effort_weight
 - **更新字段**：`update` 只修改你明确传入的字段，其余保持不变
 - **`--fixed` 是快捷方式**：等于 `-s done` + 自动填写 `fixed_at`
 - **状态机约束**：`fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`
+- **依赖阻碍状态解耦**：具有未完成前置依赖的条目，在读取/渲染视图时其有效状态（`effective_status`）为 `blocked`，但在底层 Markdown 数据中仍保持其声明状态（如 `todo` / `in_progress`）。对该条目的更新操作不会将计算出的临时 `blocked` 状态持久化固化，当前置依赖完成时，该任务将自动恢复为正常的可进行状态。
+- **结构化 JSON 契约**：所有带有 `--json` 选项的命令成功执行时，输出包装在 `{"ok": true, "data": ...}` 内；执行失败或遇严重错误时，输出包装在 `{"ok": false, "error": {"code": "错误码", "message": "错误信息", "details": {}}}` 内。常见的错误码包括 `PARSING_ERROR`（条目损坏）、`ITEM_CONFLICT`（ID 重复覆盖冲突）、`ITEM_NOT_FOUND`（条目不存在）及 `INVALID_INPUT`（非法参数输入）。
 - **正文写作**：
   - 单行简短描述：`-b "一句话描述"` 即可
   - 多行正文：用 `--body-file /tmp/body.md` 或 Heredoc + `--stdin`
@@ -142,9 +144,8 @@ for path in $(python3 -c "import json; [print(v['path'].replace('~/','$HOME/')) 
   uv run --directory ~/ai/backlog-cli backlog --dir "$path" list --priority P0,P1 --status todo
 done
 
-# 做完一条并生成概览
-uv run --directory ~/ai/backlog-cli backlog --dir <project_path> update <ID> --fixed && \
-uv run --directory ~/ai/backlog-cli backlog --dir <project_path> index
+# 做完一条（后台将自动重建概览索引 INDEX.md）
+uv run --directory ~/ai/backlog-cli backlog --dir <project_path> update <ID> --fixed
 
 # 新增条目（含多行正文 — Heredoc + --stdin）
 cat <<'EOF' | uv run --directory ~/ai/backlog-cli backlog --dir <project_path> add \

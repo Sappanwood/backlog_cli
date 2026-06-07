@@ -1,15 +1,20 @@
 """Unit tests for backlog items CRUD operations."""
 
+import json
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
+
 from backlog.items import (
+    BacklogItemParseError,
     _apply_dependency_blocking,
     _find_backlog_dir,
     _jsonify,
     _load_item,
     add_item,
     generate_index,
+    get_item_filepath,
     get_items_dir,
     list_items,
     next_id,
@@ -97,7 +102,7 @@ class TestFindBacklogDir:
 
 class TestGetItemsDir:
     def test_creates_when_missing(self, tmp_path):
-        items_dir = get_items_dir(tmp_path)
+        items_dir = get_items_dir(tmp_path, create=True)
         assert items_dir.exists()
         assert items_dir == tmp_path / "docs" / "backlog" / "items"
         assert items_dir.name == "items"
@@ -126,11 +131,12 @@ class TestLoadItem:
         assert item is not None
         assert item.body.strip() == "Hello world"
 
-    def test_returns_none_for_invalid_file(self, tmp_path):
+    def test_raises_error_for_invalid_file(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
         bad = items_dir / "bad.md"
         bad.write_text("not frontmatter")
-        assert _load_item(bad) is None
+        with pytest.raises(BacklogItemParseError):
+            _load_item(bad)
 
     def test_date_fields_parsed(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
@@ -187,7 +193,9 @@ class TestListItems:
         _write_item(items_dir, "TST-002", status="todo", depends_on=["TST-001"])
         items = list_items(tmp_path)
         tst002 = next(i for i in items if i.id == "TST-002")
-        assert tst002.status == Status.BLOCKED
+        assert tst002.is_blocked is True
+        assert tst002.effective_status == Status.BLOCKED
+        assert tst002.status == Status.TODO
 
 
 class TestShowItem:
@@ -208,7 +216,9 @@ class TestShowItem:
         _write_item(items_dir, "TST-002", status="todo", depends_on=["TST-001"])
         item = show_item("TST-002", tmp_path)
         assert item is not None
-        assert item.status == Status.BLOCKED
+        assert item.is_blocked is True
+        assert item.effective_status == Status.BLOCKED
+        assert item.status == Status.TODO
 
 
 class TestNextId:
@@ -244,6 +254,7 @@ class TestAddItem:
 
     def test_content_is_valid(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "DEP-001", project="test", title="Dep 1")
         item = BacklogItem(
             id="TST-001", project="test", title="Hello",
             category=Category.BUG, priority=Priority.P0,
@@ -317,7 +328,8 @@ class TestApplyDependencyBlocking:
         ]
         _apply_dependency_blocking(items)
         b = next(i for i in items if i.id == "B")
-        assert b.status == Status.BLOCKED
+        assert b.is_blocked is True
+        assert b.status == Status.TODO
 
     def test_no_blocking_when_dep_done(self):
         items = [
@@ -327,21 +339,25 @@ class TestApplyDependencyBlocking:
         _apply_dependency_blocking(items)
         b = next(i for i in items if i.id == "B")
         assert b.status == Status.TODO
+        assert b.is_blocked is False
 
     def test_blocks_with_missing_dep(self):
         items = [self._item("B", depends_on=["MISSING"])]
         _apply_dependency_blocking(items)
-        assert items[0].status == Status.BLOCKED
+        assert items[0].is_blocked is True
+        assert items[0].status == Status.TODO
 
     def test_skips_done_items(self):
         items = [self._item("A", status=Status.DONE, depends_on=["B"])]
         _apply_dependency_blocking(items)
         assert items[0].status == Status.DONE
+        assert items[0].is_blocked is False
 
     def test_skips_cancelled_items(self):
         items = [self._item("A", status=Status.CANCELLED, depends_on=["B"])]
         _apply_dependency_blocking(items)
         assert items[0].status == Status.CANCELLED
+        assert items[0].is_blocked is False
 
     def test_cascading_block(self):
         items = [
@@ -352,8 +368,10 @@ class TestApplyDependencyBlocking:
         _apply_dependency_blocking(items)
         b = next(i for i in items if i.id == "B")
         c = next(i for i in items if i.id == "C")
-        assert b.status == Status.BLOCKED
-        assert c.status == Status.BLOCKED
+        assert b.is_blocked is True
+        assert c.is_blocked is True
+        assert b.status == Status.TODO
+        assert c.status == Status.TODO
 
 
 class TestGenerateIndex:
@@ -397,3 +415,225 @@ class TestJsonify:
         assert _jsonify("hello") == "hello"
         assert _jsonify(42) == 42
         assert _jsonify(None) is None
+
+
+class TestPathSafety:
+    def test_get_item_filepath_valid(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        path = get_item_filepath("TST-001", tmp_path)
+        assert path.name == "TST-001.md"
+        assert path.parent == items_dir
+
+    def test_get_item_filepath_traversal(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        with pytest.raises(ValueError, match="Invalid item ID format|Path traversal detected"):
+            get_item_filepath("../evil", tmp_path)
+
+    def test_get_item_filepath_invalid_chars(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        with pytest.raises(ValueError, match="Invalid item ID format"):
+            get_item_filepath("TST/001", tmp_path)
+
+
+class TestConflictPrevention:
+    def test_add_item_conflict_raises_error(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        item1 = BacklogItem(
+            id="TST-001", project="test", title="First",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        add_item(item1, tmp_path)
+        
+        item2 = BacklogItem(
+            id="TST-001", project="test", title="Second",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        with pytest.raises(FileExistsError, match="already exists"):
+            add_item(item2, tmp_path)
+
+
+class TestDecoupledBlockedStatus:
+    def test_update_does_not_persist_blocked_status(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001", status="todo")
+        _write_item(items_dir, "TST-002", status="todo", depends_on=["TST-001"])
+        
+        item = show_item("TST-002", tmp_path)
+        assert item is not None
+        assert item.is_blocked is True
+        assert item.effective_status == Status.BLOCKED
+        assert item.status == Status.TODO
+        
+        updated_item = update_item("TST-002", {"title": "New Title"}, tmp_path)
+        assert updated_item is not None
+        assert updated_item.title == "New Title"
+        assert updated_item.status == Status.TODO
+        assert updated_item.is_blocked is True
+        assert updated_item.effective_status == Status.BLOCKED
+        
+        import frontmatter
+        post = frontmatter.load(str(items_dir / "TST-002.md"))
+        assert post.metadata.get("status") == "todo"
+        assert "is_blocked" not in post.metadata
+        assert "effective_status" not in post.metadata
+
+
+class TestReadOnlyDirectoryCreation:
+    def test_list_items_does_not_create_dir(self, tmp_path):
+        base_dir = tmp_path / "docs" / "backlog"
+        items = list_items(tmp_path)
+        assert items == []
+        items_dir = base_dir / "items"
+        assert not items_dir.exists()
+
+    def test_show_item_does_not_create_dir(self, tmp_path):
+        base_dir = tmp_path / "docs" / "backlog"
+        item = show_item("TST-001", tmp_path)
+        assert item is None
+        items_dir = base_dir / "items"
+        assert not items_dir.exists()
+
+
+class TestUnifiedBacklogDirectoryIndex:
+    def test_index_written_to_correct_unified_dir(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001", project="p1")
+        _write_item(items_dir, "TST-002", project="p2")
+        
+        subdir = tmp_path / "src" / "deep"
+        subdir.mkdir(parents=True)
+        
+        content = generate_index(subdir)
+        assert "TST-001" in content
+        assert "TST-002" in content
+        
+        content_filtered = generate_index(subdir, project="p1")
+        assert "TST-001" in content_filtered
+        assert "TST-002" not in content_filtered
+
+
+class TestConcurrencyAndAtomicReplace:
+    def test_atomic_replace_on_add_and_update(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-001", project="test", title="Atomic",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        add_item(item, tmp_path)
+        filepath = items_dir / "TST-001.md"
+        assert filepath.exists()
+        temp_filepath = filepath.with_suffix(".tmp")
+        assert not temp_filepath.exists()
+        
+        update_item("TST-001", {"title": "Updated Atomic"}, tmp_path)
+        assert filepath.exists()
+        assert not temp_filepath.exists()
+        updated = show_item("TST-001", tmp_path)
+        assert updated is not None
+        assert updated.title == "Updated Atomic"
+
+
+class TestDependenciesCheck:
+    def test_self_dependency_raises(self, tmp_path):
+        import pytest
+        _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-001", project="test", title="Self dep",
+            category=Category.FEATURE, priority=Priority.P1,
+            depends_on=["TST-001"]
+        )
+        with pytest.raises(ValueError, match="Self dependency detected"):
+            add_item(item, tmp_path)
+
+    def test_missing_dependency_raises(self, tmp_path):
+        import pytest
+        _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-002", project="test", title="Missing dep",
+            category=Category.FEATURE, priority=Priority.P1,
+            depends_on=["NONEXIST"]
+        )
+        with pytest.raises(ValueError, match="Dependency not found"):
+            add_item(item, tmp_path)
+
+    def test_circular_dependency_raises(self, tmp_path):
+        import pytest
+        _make_tmp_backlog_dir(tmp_path)
+        # 先建立 TST-001
+        item1 = BacklogItem(
+            id="TST-001", project="test", title="Item 1",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        add_item(item1, tmp_path)
+        
+        # 建立 TST-002 依赖 TST-001
+        item2 = BacklogItem(
+            id="TST-002", project="test", title="Item 2",
+            category=Category.FEATURE, priority=Priority.P1,
+            depends_on=["TST-001"]
+        )
+        add_item(item2, tmp_path)
+
+        # 现在更新 TST-001，让它依赖 TST-002，构成环
+        with pytest.raises(ValueError, match="Circular dependency detected"):
+            update_item("TST-001", {"depends_on": ["TST-002"]}, tmp_path)
+
+
+class TestProjectRegistryPrefix:
+    def test_fallback_prefix(self):
+        from backlog.items import get_project_prefix
+        # 假如没有 projects.json，应使用前三个字母大写
+        assert get_project_prefix("someproject") == "SOM"
+
+    def test_registry_prefix(self, tmp_path, monkeypatch):
+        from backlog.items import get_project_prefix
+        # mock 注册表路径，使其在临时目录下
+        fake_registry = tmp_path / "projects.json"
+        fake_registry.write_text(json.dumps({
+            "projects": {
+                "backlog-cli": {
+                    "backlog_prefix": "BCK"
+                }
+            }
+        }))
+        
+        from pathlib import Path as OriginalPath
+        # 保存原始 expanduser
+        orig_expanduser = OriginalPath.expanduser
+
+        def fake_expanduser(self):
+            if "projects.json" in str(self):
+                return fake_registry
+            return orig_expanduser(self)
+            
+        monkeypatch.setattr(OriginalPath, "expanduser", fake_expanduser)
+        assert get_project_prefix("backlog-cli") == "BCK"
+        # 即使找不到别的项目，也应 fallback 成功
+        assert get_project_prefix("inkborn") == "INK"
+
+
+class TestCustomFieldsExtra:
+    def test_extra_fields_saved_and_loaded(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        # 我们用已有的 _write_item 写一个包含自定义字段的文件
+        _write_item(items_dir, "TST-001", project="test", foo="bar", hello="world")
+        
+        # 加载它，确认能读出 extra
+        loaded = show_item("TST-001", tmp_path)
+        assert loaded is not None
+        assert loaded.extra == {"foo": "bar", "hello": "world"}
+        
+        # 写入一个新的带 extra 字段的项目
+        item = BacklogItem(
+            id="TST-002", project="test", title="Extra Field Item",
+            category=Category.FEATURE, priority=Priority.P1,
+            extra={"foo2": "bar2"}
+        )
+        add_item(item, tmp_path)
+        
+        # 确认物理上写入了文件且不带有 "extra: " 这样的嵌套 YAML
+        filepath = items_dir / "TST-002.md"
+        content = filepath.read_text()
+        assert "foo2: bar2" in content
+        assert "extra:" not in content
+

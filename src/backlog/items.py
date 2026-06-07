@@ -1,5 +1,9 @@
 """CRUD operations for backlog items."""
 
+import contextlib
+import fcntl
+import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -9,6 +13,14 @@ from .models import BacklogItem, Status
 
 ITEMS_DIRNAME = "items"
 INDEX_FILENAME = "INDEX.md"
+
+
+class BacklogItemParseError(ValueError):
+    """Raised when parsing or validating a backlog item file fails."""
+    def __init__(self, filepath: Path, original_error: Exception):
+        self.filepath = filepath
+        self.original_error = original_error
+        super().__init__(f"Failed to parse item file {filepath}: {original_error}")
 
 
 def _find_backlog_dir(start: Path | None = None) -> Path | None:
@@ -22,23 +34,125 @@ def _find_backlog_dir(start: Path | None = None) -> Path | None:
     return None
 
 
-def get_items_dir(project_path: Path | None = None) -> Path:
-    """Return the items directory, creating it if needed."""
+def get_backlog_dir(project_path: Path | None = None, create: bool = False) -> Path:
+    """Return the docs/backlog directory, optionally creating it."""
     base = _find_backlog_dir(project_path)
     if base is None:
         root = project_path if project_path is not None else Path.cwd()
         base = root / "docs" / "backlog"
+    if create:
+        base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def get_items_dir(project_path: Path | None = None, create: bool = False) -> Path:
+    """Return the items directory, optionally creating it."""
+    base = get_backlog_dir(project_path, create=create)
     items_dir = base / ITEMS_DIRNAME
-    items_dir.mkdir(parents=True, exist_ok=True)
+    if create:
+        items_dir.mkdir(parents=True, exist_ok=True)
     return items_dir
 
 
-def _load_item(filepath: Path) -> BacklogItem | None:
-    """Load a single backlog item from a markdown file."""
+def get_item_filepath(item_id: str, project_path: Path | None = None, create: bool = False) -> Path:
+    """Get the resolved safe path for a backlog item. Raises ValueError if path traversal detected."""
+    if not re.match(r"^[a-zA-Z0-9_-]+$", item_id):
+        raise ValueError("Invalid item ID format")
+    items_dir = get_items_dir(project_path, create=create)
+    filepath = (items_dir / f"{item_id}.md").resolve()
+    if not filepath.is_relative_to(items_dir.resolve()):
+        raise ValueError("Path traversal detected")
+    return filepath
+
+
+def get_project_prefix(project_name: str) -> str:
+    """Get project backlog prefix from ~/.config/opencode/projects.json or fallback to project_name[:3].upper()."""
+    registry_path = Path("~/.config/opencode/projects.json").expanduser()
+    if registry_path.exists():
+        try:
+            with open(registry_path) as f:
+                data = json.load(f)
+            projects = data.get("projects", {})
+            if project_name in projects:
+                prefix = projects[project_name].get("backlog_prefix")
+                if prefix:
+                    return prefix.upper()
+        except Exception:
+            pass
+    return project_name[:3].upper()
+
+
+def check_dependencies(
+    item_id: str,
+    depends_on: list[str],
+    project_path: Path | None = None,
+) -> None:
+    """Validate dependency constraints: self-dependency, existence, and cycle detection."""
+    if item_id in depends_on:
+        raise ValueError(f"Self dependency detected: '{item_id}' cannot depend on itself.")
+
+    all_items = list_items(project_path)
+    existing_ids = {item.id for item in all_items}
+
+    for dep in depends_on:
+        if dep not in existing_ids:
+            raise ValueError(f"Dependency not found: '{dep}' does not exist.")
+
+    # Cycle detection
+    graph: dict[str, list[str]] = {item.id: item.depends_on for item in all_items}
+    graph[item_id] = depends_on
+
+    visited: dict[str, int] = {node: 0 for node in graph}
+
+    def dfs(node: str) -> bool:
+        visited[node] = 1  # visiting
+        for neighbor in graph.get(node, []):
+            if neighbor not in visited:
+                continue
+            if visited[neighbor] == 1:
+                return True
+            if visited[neighbor] == 0 and dfs(neighbor):
+                return True
+        visited[node] = 2  # visited
+        return False
+
+    for node in graph:
+        if visited[node] == 0 and dfs(node):
+            raise ValueError("Circular dependency detected.")
+
+
+def _rebuild_index_silent(project_path: Path | None = None) -> None:
+    """Silently rebuild the INDEX.md file."""
+    try:
+        content = generate_index(project_path)
+        backlog_dir = get_backlog_dir(project_path, create=True)
+        index_path = backlog_dir / INDEX_FILENAME
+        temp_index_path = index_path.with_suffix(".tmp")
+        temp_index_path.write_text(content)
+        temp_index_path.replace(index_path)
+    except Exception:
+        pass
+
+
+@contextlib.contextmanager
+def _lock_backlog(project_path: Path | None = None):
+    """Acquire an exclusive lock on the backlog directory using a lock file."""
+    backlog_dir = get_backlog_dir(project_path, create=True)
+    lock_file_path = backlog_dir / ".lock"
+    with open(lock_file_path, "w") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_item(filepath: Path) -> BacklogItem:
+    """Load a single backlog item from a markdown file. Raises BacklogItemParseError on failure."""
     try:
         post = frontmatter.load(str(filepath))
-    except Exception:
-        return None
+    except Exception as e:
+        raise BacklogItemParseError(filepath, e) from e
     try:
         meta = dict(post.metadata)
         meta["id"] = meta.get("id", filepath.stem)
@@ -52,9 +166,19 @@ def _load_item(filepath: Path) -> BacklogItem | None:
                 meta[field] = val.date()
             elif val is None and field != "fixed_at":
                 meta[field] = date.today()
+
+        # Separate custom fields into extra
+        known_fields = set(BacklogItem.model_fields.keys())
+        known_fields.discard("extra")
+        extra_data = {}
+        for k in list(meta.keys()):
+            if k not in known_fields and k != "body":
+                extra_data[k] = meta.pop(k)
+        meta["extra"] = extra_data
+
         return BacklogItem.model_validate(meta)
-    except Exception:
-        return None
+    except Exception as e:
+        raise BacklogItemParseError(filepath, e) from e
 
 
 def _apply_dependency_blocking(items: list[BacklogItem]) -> None:
@@ -64,32 +188,31 @@ def _apply_dependency_blocking(items: list[BacklogItem]) -> None:
         if item.status in (Status.DONE, Status.CANCELLED):
             continue
         if item.depends_on and not all(dep in done_ids for dep in item.depends_on):
-            item.status = Status.BLOCKED
+            item.is_blocked = True
 
 
 def list_items(project_path: Path | None = None) -> list[BacklogItem]:
     """List all backlog items. Auto-marks items as blocked if dependencies are not done."""
-    items_dir = get_items_dir(project_path)
+    items_dir = get_items_dir(project_path, create=False)
     items: list[BacklogItem] = []
     if not items_dir.exists():
         return items
     for f in sorted(items_dir.glob("*.md")):
         item = _load_item(f)
-        if item is not None:
-            items.append(item)
+        items.append(item)
     _apply_dependency_blocking(items)
     return items
 
 
 def show_item(item_id: str, project_path: Path | None = None) -> BacklogItem | None:
     """Show a single item by ID. Auto-marks as blocked if dependencies are not done."""
-    items_dir = get_items_dir(project_path)
-    filepath = items_dir / f"{item_id}.md"
+    try:
+        filepath = get_item_filepath(item_id, project_path, create=False)
+    except ValueError:
+        return None
     if not filepath.exists():
         return None
     item = _load_item(filepath)
-    if item is None:
-        return None
     if item.status not in (Status.DONE, Status.CANCELLED) and item.depends_on:
         done_ids = {
             i.id
@@ -97,13 +220,15 @@ def show_item(item_id: str, project_path: Path | None = None) -> BacklogItem | N
             if i.status == Status.DONE
         }
         if not all(dep in done_ids for dep in item.depends_on):
-            item.status = Status.BLOCKED
+            item.is_blocked = True
     return item
 
 
 def next_id(project_name: str, project_path: Path | None = None) -> str:
     """Generate the next sequential ID for a project."""
-    prefix = project_name[:3].upper()
+    if not re.match(r"^[a-zA-Z0-9_-]+$", project_name):
+        raise ValueError("Invalid project name format")
+    prefix = get_project_prefix(project_name)
     items = list_items(project_path)
     existing = [
         int(item.id.split("-")[-1])
@@ -117,16 +242,26 @@ def next_id(project_name: str, project_path: Path | None = None) -> str:
 
 def add_item(item: BacklogItem, project_path: Path | None = None) -> Path:
     """Create a new backlog item file. Returns the file path."""
-    items_dir = get_items_dir(project_path)
-    metadata = item.model_dump(
-        mode="json",
-        exclude={"body", "score"},
-        exclude_none=True,
-    )
-    post = frontmatter.Post(item.body, **metadata)
-    filepath = items_dir / f"{item.id}.md"
-    filepath.write_text(frontmatter.dumps(post))
-    return filepath
+    with _lock_backlog(project_path):
+        check_dependencies(item.id, item.depends_on, project_path)
+        filepath = get_item_filepath(item.id, project_path, create=True)
+        if filepath.exists():
+            raise FileExistsError(f"Backlog item with ID '{item.id}' already exists.")
+        metadata = item.model_dump(
+            mode="json",
+            exclude={"body", "score", "effective_status"},
+            exclude_none=True,
+        )
+        extra = metadata.pop("extra", {})
+        if extra:
+            metadata.update(extra)
+        post = frontmatter.Post(item.body, **metadata)
+        
+        temp_filepath = filepath.with_suffix(".tmp")
+        temp_filepath.write_text(frontmatter.dumps(post))
+        temp_filepath.replace(filepath)
+        _rebuild_index_silent(project_path)
+        return filepath
 
 
 def _jsonify(value):
@@ -145,39 +280,52 @@ def update_item(
     item_id: str, updates: dict, project_path: Path | None = None
 ) -> BacklogItem | None:
     """Update a backlog item's frontmatter fields, preserving body."""
-    items_dir = get_items_dir(project_path)
-    filepath = items_dir / f"{item_id}.md"
-    if not filepath.exists():
-        return None
+    with _lock_backlog(project_path):
+        if "depends_on" in updates:
+            check_dependencies(item_id, updates["depends_on"], project_path)
+        filepath = get_item_filepath(item_id, project_path, create=False)
+        if not filepath.exists():
+            return None
 
-    current = show_item(item_id, project_path)
-    if current is None:
-        return None
+        current = show_item(item_id, project_path)
+        if current is None:
+            return None
 
-    body = current.body
-    current_data = current.model_dump(mode="json", exclude={"body", "score"}, exclude_none=True)
+        body = current.body
+        current_data = current.model_dump(mode="json", exclude={"body", "score", "effective_status"}, exclude_none=True)
 
-    for key, value in updates.items():
-        if value is not None:
-            current_data[key] = _jsonify(value)
+        for key, value in updates.items():
+            if value is not None:
+                current_data[key] = _jsonify(value)
 
-    if current_data.get("status") != Status.DONE.value:
-        current_data.pop("fixed_at", None)
+        if current_data.get("status") != Status.DONE.value:
+            current_data.pop("fixed_at", None)
 
-    current_data["updated"] = date.today().isoformat()
+        current_data["updated"] = date.today().isoformat()
 
-    body = current_data.pop("body", body)
+        extra = current_data.pop("extra", {})
+        if extra:
+            current_data.update(extra)
 
-    post = frontmatter.Post(body, **current_data)
-    filepath.write_text(frontmatter.dumps(post))
-    return _load_item(filepath)
+        body = current_data.pop("body", body)
+
+        post = frontmatter.Post(body, **current_data)
+        
+        temp_filepath = filepath.with_suffix(".tmp")
+        temp_filepath.write_text(frontmatter.dumps(post))
+        temp_filepath.replace(filepath)
+        _rebuild_index_silent(project_path)
+        return show_item(item_id, project_path)
 
 
 def generate_index(
     project_path: Path | None = None,
+    project: str | None = None,
 ) -> str:
     """Generate an INDEX.md overview for the backlog."""
     items = list_items(project_path)
+    if project:
+        items = [i for i in items if i.project == project]
     items.sort(key=lambda x: x.score, reverse=True)
 
     lines = [
@@ -193,7 +341,7 @@ def generate_index(
     by_category: dict[str, int] = {}
     by_priority: dict[str, int] = {}
     for item in items:
-        by_status[item.status.value] = by_status.get(item.status.value, 0) + 1
+        by_status[item.effective_status.value] = by_status.get(item.effective_status.value, 0) + 1
         by_category[item.category.value] = by_category.get(item.category.value, 0) + 1
         by_priority[item.priority.value] = by_priority.get(item.priority.value, 0) + 1
 
@@ -215,7 +363,7 @@ def generate_index(
 
     lines.append("## Recommended Next (by score)")
     lines.append("")
-    active = [i for i in items if i.status in (Status.TODO, Status.IN_PROGRESS) and i.score > 0]
+    active = [i for i in items if i.effective_status in (Status.TODO, Status.IN_PROGRESS) and i.score > 0]
     for item in active[:20]:
         lines.append(
             f"- [{item.id}](items/{item.id}.md) [{item.priority.value}] "
