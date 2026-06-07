@@ -53,17 +53,15 @@ Markdown 正文（body）
 
 ### ID 生成流程
 
-1. 取 `--project` 值的前 3 个字母，大写 → 前缀（如 `zhijian` → `ZHI`）
-2. 扫描 `items/` 目录中同前缀的文件，取最大序号
-3. 返回 `<前缀>-<最大序号+1>`（三位补零）
+1. 默认取注册表 `projects.json` 里该项目的 `backlog_prefix`；如果未配置或为空，取 `project` 值前 3 个字母大写（如 `zhijian` → `ZHI`）。
+2. 在并发文件锁 `_lock_backlog` 保护下执行 ID 分配。
+3. **前缀智能兼容 fallback**：扫描当前项目下所有已有的条目 ID。若有且仅有一个前缀存在（如 `BAC`），即使注册表已被更新为其他前缀（如 `BCK`），也将自动沿用该已有前缀，以保证项目内 ID 的连续性。
+4. 扫描该前缀在 `items/` 目录中的最大序号，返回 `<前缀>-<最大序号+1>`（三位补零，如 `BAC-023`）。
 
 ### 项目发现流程
 
-`_find_backlog_dir(start)` 从指定目录向上逐级查找 `docs/backlog/`，找到即返回。
-`get_items_dir(project_path)` 未找到时的创建位置取决于调用方式：
-
-- 显式传入 `project_path`：在该路径下创建 `docs/backlog/items/`
-- 未传入 `project_path`：在当前工作目录下创建 `docs/backlog/items/`
+- **显式传入 `project_path`（如指定 `--dir` 参数）**：严格定位到 `project_path / docs / backlog /` 下，不会向上寻找。未找到时在该路径下创建。
+- **未传入 `project_path`**：调用 `_find_backlog_dir(start)` 从当前工作目录（CWD）向上逐级查找 `docs/backlog/`，找到即返回；若查找到根目录依然没有，则在当前工作目录下创建 `docs/backlog/`。
 
 ### 推荐排序
 
@@ -96,6 +94,7 @@ class BacklogItem(BaseModel):
     effort: Effort
     impact: Impact
     status: Status
+    revision: str  # 乐观锁版本指纹 (UUID hex 前8位)
     ...
     score: float  # @computed_field
 ```
@@ -103,12 +102,12 @@ class BacklogItem(BaseModel):
 ### items.py → cli.py
 
 ```python
-list_items(project_path: str) -> list[BacklogItem]
-show_item(item_id: str, project_path: str) -> BacklogItem | None
-add_item(item: BacklogItem, project_path: str) -> BacklogItem
-update_item(item_id: str, updates: dict, project_path: str) -> BacklogItem
-next_id(project_name: str, project_path: str) -> str
-generate_index(project_path: str) -> None
+list_items(project_path: Path | None) -> list[BacklogItem]
+show_item(item_id: str, project_path: Path | None) -> BacklogItem | None
+add_item(item: BacklogItem, project_path: Path | None) -> Path
+update_item(item_id: str, updates: dict, project_path: Path | None, expected_revision: str | None) -> BacklogItem | None
+next_id(project_name: str, project_path: Path | None) -> str
+generate_index(project_path: Path | None, project: str | None) -> str
 ```
 
 ## 关键设计决策

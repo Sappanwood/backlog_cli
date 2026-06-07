@@ -6,6 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated
 
+import click
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -17,8 +18,8 @@ from .items import (
     generate_index,
     get_backlog_dir,
     get_item_filepath,
+    get_warnings,
     list_items,
-    next_id,
     show_item,
     update_item,
 )
@@ -33,6 +34,7 @@ from .models import (
 
 app = typer.Typer(help="Unified backlog manager")
 console = Console()
+stderr_console = Console(stderr=True)
 _project_dir: Path | None = None
 
 
@@ -183,6 +185,9 @@ def list_cmd(
     if sort not in ("score", "priority", "id"):
         raise typer.BadParameter("Sort option must be one of: score, priority, id")
 
+    if limit < 0:
+        raise typer.BadParameter("Limit must be a non-negative integer.")
+
     allowed_priorities = None
     if priority:
         allowed_priorities = []
@@ -299,8 +304,8 @@ def add(
     title: str = typer.Option(..., "--title", "-t", help="Item title"),
     category: Category = typer.Option(..., "--category", "-c", help="Category"),
     priority: Priority = typer.Option(..., "--priority", help="Priority (P0-P3)"),
-    effort: Effort = typer.Option(Effort.M, "--effort", "-e", help="Effort estimate"),
-    impact: Impact = typer.Option(Impact.MEDIUM, "--impact", "-i", help="Impact level"),
+    effort: Effort | None = typer.Option(None, "--effort", "-e", help="Effort estimate"),
+    impact: Impact | None = typer.Option(None, "--impact", "-i", help="Impact level"),
     tags: str = typer.Option("", "--tags", help="Comma-separated tags"),
     source: str = typer.Option("", "--source", help="Source label"),
     depends_on: str = typer.Option("", "--depends-on", help="Comma-separated dependency IDs"),
@@ -310,27 +315,21 @@ def add(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Add a new backlog item."""
-    try:
-        item_id = next_id(project, _project_path())
-    except BacklogItemParseError as e:
-        if json_output:
-            _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
-        else:
-            console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1) from e
-    except ValueError as e:
-        if json_output:
-            _print_json_error("INVALID_INPUT", str(e))
-        else:
-            console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1) from e
+    applied_defaults = []
+    if effort is None:
+        effort = Effort.M
+        applied_defaults.append("effort (M)")
+    if impact is None:
+        impact = Impact.MEDIUM
+        applied_defaults.append("impact (medium)")
+
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     dep_list = [d.strip() for d in depends_on.split(",") if d.strip()]
     body_content = _resolve_body(body, body_file, stdin) or ""
 
     try:
         item = BacklogItem(
-            id=item_id,
+            id="AUTO",
             project=project,
             title=title,
             category=category,
@@ -362,13 +361,21 @@ def add(
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
 
+    warnings_list = get_warnings()
+    if applied_defaults:
+        warnings_list.append(f"Defaults applied: {', '.join(applied_defaults)}. Please evaluate them if necessary.")
+
     if json_output:
         _print_json_success({
-            "id": item_id,
+            "id": item.id,
             "filepath": str(filepath),
-        })
+        }, warnings=warnings_list if warnings_list else None)
         return
-    console.print(f"[green]Created[/green] {item_id} → {filepath}")
+
+    if warnings_list:
+        for w in warnings_list:
+            stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
+    console.print(f"[green]Created[/green] {item.id} → {filepath}")
     console.print(f"[bold white]{title}[/bold white]")
 
 
@@ -388,6 +395,9 @@ def update(
     body: str | None = typer.Option(None, "--body", "-b", help="New body text"),
     body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
     stdin: bool = typer.Option(False, "--stdin", help="Read body from stdin"),
+    expected_revision: str | None = typer.Option(
+        None, "--expected-revision", help="Expected item revision for optimistic locking"
+    ),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Update a backlog item."""
@@ -429,7 +439,7 @@ def update(
         raise typer.Exit(1)
 
     try:
-        result = update_item(item_id, updates, _project_path())
+        result = update_item(item_id, updates, _project_path(), expected_revision=expected_revision)
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -450,9 +460,14 @@ def update(
             console.print(f"[red]Item '{item_id}' not found.[/red]")
         raise typer.Exit(1)
 
+    warnings_list = get_warnings()
     if json_output:
-        _print_json_success(result.model_dump(mode="json"))
+        _print_json_success(result.model_dump(mode="json"), warnings=warnings_list if warnings_list else None)
         return
+
+    if warnings_list:
+        for w in warnings_list:
+            stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
     console.print(f"[green]Updated[/green] {item_id} — {result.title}")
 
 
@@ -554,6 +569,8 @@ def next_cmd(
     """Show recommended next items sorted by priority score."""
     if status not in (Status.TODO, Status.IN_PROGRESS):
         raise typer.BadParameter("Only 'todo' or 'in_progress' status can be recommended.")
+    if limit < 0:
+        raise typer.BadParameter("Limit must be a non-negative integer.")
 
     try:
         items = list_items(_project_path())
@@ -571,16 +588,28 @@ def next_cmd(
     active.sort(key=lambda x: x.score, reverse=True)
     active = active[:limit]
 
-    format_str = "json" if json_output else "table"
+    warnings_list = get_warnings()
 
     if not active:
         if json_output:
-            _print_json_success([])
+            _print_json_success([], warnings=warnings_list if warnings_list else None)
         else:
+            if warnings_list:
+                for w in warnings_list:
+                    stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
             console.print(f"[dim]No active {status.value} items to recommend.[/dim]")
         return
 
-    _output_items(active, format=format_str, show_score=True)
+    if json_output:
+        _print_json_success(
+            [i.model_dump(mode="json") for i in active],
+            warnings=warnings_list if warnings_list else None
+        )
+    else:
+        if warnings_list:
+            for w in warnings_list:
+                stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
+        _print_table(active, show_score=True)
 
 
 @app.command()
@@ -653,5 +682,41 @@ def edit(
     os.system(f"{editor} {filepath}")
 
 
+def run_cli():
+    is_json = "--json" in sys.argv or any(
+        sys.argv[i] == "--format" and i + 1 < len(sys.argv) and sys.argv[i + 1] == "json"
+        for i in range(len(sys.argv))
+    )
+    if is_json:
+        try:
+            click_app = typer.main.get_command(app)
+            ret_code = click_app.main(standalone_mode=False)
+            if isinstance(ret_code, int) and ret_code != 0:
+                sys.exit(ret_code)
+        except click.exceptions.ClickException as e:
+            _print_json_error("INVALID_INPUT", e.format_message())
+            sys.exit(e.exit_code)
+        except click.exceptions.Abort:
+            _print_json_error("ABORTED", "Operation aborted.")
+            sys.exit(1)
+        except (typer.Exit, click.exceptions.Exit) as e:
+            sys.exit(e.exit_code)
+        except Exception as e:
+            code = "INTERNAL_ERROR"
+            msg = str(e)
+            if isinstance(e, FileExistsError):
+                code = "ITEM_CONFLICT"
+            elif isinstance(e, ValueError):
+                code = "REVISION_MISMATCH" if "Revision mismatch" in msg else "INVALID_INPUT"
+            elif "not found" in msg.lower():
+                code = "ITEM_NOT_FOUND"
+            elif "BacklogItemParseError" in type(e).__name__:
+                code = "PARSING_ERROR"
+            _print_json_error(code, msg)
+            sys.exit(1)
+    else:
+        app()
+
+
 if __name__ == "__main__":
-    app()
+    run_cli()

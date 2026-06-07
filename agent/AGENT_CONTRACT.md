@@ -14,7 +14,7 @@
   "projects": {
     "inkborn": { "path": "~/inkborn",              "backlog_prefix": "INK", ... },
     "zhijian": { "path": "~/ai/ZhiJian",           "backlog_prefix": "ZHI", ... },
-    "backlog-cli": { "path": "~/ai/backlog-cli",   "backlog_prefix": "BAC", ... }
+    "backlog-cli": { "path": "~/ai/backlog-cli",   "backlog_prefix": "BCK", ... }
   }
 }
 ```
@@ -111,7 +111,7 @@ score = priority_weight × impact_weight × effort_weight
 - **`--fixed` 是快捷方式**：等于 `-s done` + 自动填写 `fixed_at`
 - **状态机约束**：`fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`
 - **依赖阻碍状态解耦**：具有未完成前置依赖的条目，在读取/渲染视图时其有效状态（`effective_status`）为 `blocked`，但在底层 Markdown 数据中仍保持其声明状态（如 `todo` / `in_progress`）。对该条目的更新操作不会将计算出的临时 `blocked` 状态持久化固化，当前置依赖完成时，该任务将自动恢复为正常的可进行状态。
-- **结构化 JSON 契约**：所有带有 `--json` 选项的命令成功执行时，输出包装在 `{"ok": true, "data": ...}` 内；执行失败或遇严重错误时，输出包装在 `{"ok": false, "error": {"code": "错误码", "message": "错误信息", "details": {}}}` 内。常见的错误码包括 `PARSING_ERROR`（条目损坏）、`ITEM_CONFLICT`（ID 重复覆盖冲突）、`ITEM_NOT_FOUND`（条目不存在）及 `INVALID_INPUT`（非法参数输入）。
+- **结构化 JSON 契约**：所有带有 `--json`（或 `--format json`）选项的命令成功执行时，输出包装在 `{"ok": true, "data": ...}` 内；执行失败或遇严重错误时，输出包装在 `{"ok": false, "error": {"code": "错误码", "message": "错误信息", "details": {}}}` 内。常见的错误码包括 `PARSING_ERROR`（条目损坏）、`ITEM_CONFLICT`（ID 重复覆盖冲突）、`ITEM_NOT_FOUND`（条目不存在）及 `INVALID_INPUT`（非法参数输入，包括非法 sort、非负 limit 或 priority 校验等 ClickException 错误，都会在 JSON 模式下由此统一结构化输出，并不直接抛出人类终端文本）。
 - **正文写作**：
   - 单行简短描述：`-b "一句话描述"` 即可
   - 多行正文：用 `--body-file /tmp/body.md` 或 Heredoc + `--stdin`
@@ -120,6 +120,8 @@ score = priority_weight × impact_weight × effort_weight
   - **通道安全**：`--stdin` 和 `--body-file` 为二进制安全通道，可安全传递任意 Markdown（含代码块、ASCII 表格、反引号 `` ` ``、管道符 `|` 等特殊字符）。`-b` 走 shell 参数解析，特殊字符需转义，仅适用于单行纯文本
 - **非 TTY 环境**：`edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`
 - **`next --json`**：返回与 `list --json` 一致的结构化输出，供 Agent 解析推荐列表
+- **并发控制与版本锁 (Revision)**：每个条目均在 Frontmatter 包含一个 `revision` 数据指纹（由 UUID 构成）。使用 `update` 修改条目时，可传入 `--expected-revision <REV>` 进行乐观锁校验，若当前条目版本不一致将报错 `Revision mismatch` 拒绝修改。
+- **安全锁内自动 ID 分配**：新增条目时无需前置在外部计算 ID，底层在 `_lock_backlog` 锁中计算 `next_id()`，能保证在多 Agent 并发写入时，绝对不分配出重复的 ID，也绝对不发生写入覆盖冲突。
 
 ## 6. 跨项目使用
 

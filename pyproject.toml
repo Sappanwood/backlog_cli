@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-backlog = "backlog.cli:app"
+backlog = "backlog.cli:run_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/backlog"]

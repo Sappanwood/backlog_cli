@@ -391,3 +391,69 @@ class TestNextCmdRefactoring:
         assert "TST-002" in result_ip.stdout
         assert "TST-001" not in result_ip.stdout
 
+
+class TestCLIValidationAndSecurity:
+    def test_negative_limit_raises(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        
+        # list limit
+        result_list = runner.invoke(app, [*_dir_flag(project_path), "list", "--limit", "-1"])
+        assert result_list.exit_code == 2
+        assert "Limit must be a non-negative integer" in result_list.output
+        
+        # next limit
+        result_next = runner.invoke(app, [*_dir_flag(project_path), "next", "--limit", "-1"])
+        assert result_next.exit_code == 2
+        assert "Limit must be a non-negative integer" in result_next.output
+
+    def test_expected_revision_mismatch_raises(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001")
+        
+        # Try updating with mismatching revision
+        result = runner.invoke(app, [
+            *_dir_flag(project_path), "update", "TST-001", "--title", "New Title", "--expected-revision", "wrong-rev"
+        ])
+        assert result.exit_code == 1
+        assert "Revision mismatch" in result.output
+
+    def test_click_exception_renders_json(self, runner, tmp_path):
+        import sys
+
+        import pytest
+        orig_argv = list(sys.argv)
+        sys.argv = ["backlog", "list", "--priority", "P9", "--json"]
+        try:
+            from backlog.cli import run_cli
+            with pytest.raises(SystemExit) as excinfo:
+                run_cli()
+            assert excinfo.value.code == 2
+        finally:
+            sys.argv = orig_argv
+
+    def test_general_exception_renders_json(self, runner, tmp_path):
+        import sys
+
+        import pytest
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001")
+        
+        orig_argv = list(sys.argv)
+        sys.argv = [
+            "backlog",
+            "--dir", str(project_path),
+            "update", "TST-001",
+            "--title", "New Title",
+            "--expected-revision", "wrong-rev",
+            "--json"
+        ]
+        try:
+            from backlog.cli import run_cli
+            with pytest.raises(SystemExit) as excinfo:
+                run_cli()
+            assert excinfo.value.code == 1
+        finally:
+            sys.argv = orig_argv
+

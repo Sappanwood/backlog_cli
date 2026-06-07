@@ -500,14 +500,11 @@ class TestUnifiedBacklogDirectoryIndex:
         _write_item(items_dir, "TST-001", project="p1")
         _write_item(items_dir, "TST-002", project="p2")
         
-        subdir = tmp_path / "src" / "deep"
-        subdir.mkdir(parents=True)
-        
-        content = generate_index(subdir)
+        content = generate_index(tmp_path)
         assert "TST-001" in content
         assert "TST-002" in content
         
-        content_filtered = generate_index(subdir, project="p1")
+        content_filtered = generate_index(tmp_path, project="p1")
         assert "TST-001" in content_filtered
         assert "TST-002" not in content_filtered
 
@@ -636,4 +633,115 @@ class TestCustomFieldsExtra:
         content = filepath.read_text()
         assert "foo2: bar2" in content
         assert "extra:" not in content
+
+
+class TestRevisionAndLock:
+    def test_item_revision_generated_on_add(self, tmp_path):
+        _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-001", project="test", title="Revision test",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        add_item(item, tmp_path)
+        
+        loaded = show_item("TST-001", tmp_path)
+        assert loaded is not None
+        assert loaded.revision != ""
+        
+        # update should change revision
+        old_rev = loaded.revision
+        updated = update_item("TST-001", {"title": "New title"}, tmp_path)
+        assert updated is not None
+        assert updated.revision != old_rev
+
+    def test_optimistic_locking(self, tmp_path):
+        import pytest
+        _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-001", project="test", title="Lock test",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        add_item(item, tmp_path)
+        
+        loaded = show_item("TST-001", tmp_path)
+        assert loaded is not None
+        
+        # Correct expected revision
+        update_item("TST-001", {"title": "Correct"}, tmp_path, expected_revision=loaded.revision)
+        
+        # Incorrect expected revision should raise error
+        with pytest.raises(ValueError, match="Revision mismatch"):
+            update_item("TST-001", {"title": "Incorrect"}, tmp_path, expected_revision="wrong-rev")
+
+    def test_missing_revision_md5_fallback(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        filepath = items_dir / "BAC-001.md"
+        filepath.write_text("""---
+category: feature
+created: '2026-04-27'
+depends_on: []
+effort: M
+id: BAC-001
+impact: medium
+priority: P2
+project: backlog-cli
+status: todo
+tags: []
+title: test title
+updated: '2026-06-07'
+---
+body text""")
+        
+        loaded = show_item("BAC-001", tmp_path)
+        assert loaded is not None
+        assert loaded.revision != ""
+        assert len(loaded.revision) == 8
+        
+        import hashlib
+        expected_md5 = hashlib.md5(filepath.read_bytes()).hexdigest()[:8]
+        assert loaded.revision == expected_md5
+
+
+class TestExactPathScope:
+    def test_explicit_dir_does_not_walk_upward(self, tmp_path):
+        _make_tmp_backlog_dir(tmp_path)
+        subdir = tmp_path / "src" / "deep"
+        subdir.mkdir(parents=True)
+        
+        from backlog.items import get_backlog_dir
+        
+        # 显式传入 subdir 必须精确落在 subdir 之下
+        base = get_backlog_dir(subdir)
+        assert base == subdir / "docs" / "backlog"
+
+
+class TestPrefixFallbackCompatibility:
+    def test_next_id_fallback_to_existing_single_prefix(self, tmp_path, monkeypatch):
+        import json
+        fake_registry = tmp_path / "projects.json"
+        fake_registry.write_text(json.dumps({
+            "projects": {
+                "backlog-cli": {
+                    "backlog_prefix": "BCK"
+                }
+            }
+        }))
+        
+        from pathlib import Path as OriginalPath
+        orig_expanduser = OriginalPath.expanduser
+
+        def fake_expanduser(self):
+            if "projects.json" in str(self):
+                return fake_registry
+            return orig_expanduser(self)
+            
+        monkeypatch.setattr(OriginalPath, "expanduser", fake_expanduser)
+        
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "BAC-022", project="backlog-cli", title="Old Item")
+        
+        from backlog.items import next_id
+        next_val = next_id("backlog-cli", tmp_path)
+        assert next_val == "BAC-023"
+
 

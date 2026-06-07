@@ -92,11 +92,14 @@ class BacklogItem(BaseModel):
     updated: date = Field(default_factory=lambda: date.today())
     body: str = ""
     is_blocked: bool = Field(default=False, exclude=True)
+    revision: str = Field(default="")
     extra: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("id")
     @classmethod
     def validate_id(cls, v: str) -> str:
+        if v == "AUTO":
+            return v
         if not re.match(r"^[a-zA-Z0-9_-]+$", v):
             raise ValueError("ID can only contain alphanumeric characters, hyphens, and underscores")
         return v

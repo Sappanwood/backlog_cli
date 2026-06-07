@@ -4,6 +4,7 @@ import contextlib
 import fcntl
 import json
 import re
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 
@@ -35,11 +36,13 @@ def _find_backlog_dir(start: Path | None = None) -> Path | None:
 
 
 def get_backlog_dir(project_path: Path | None = None, create: bool = False) -> Path:
-    """Return the docs/backlog directory, optionally creating it."""
-    base = _find_backlog_dir(project_path)
-    if base is None:
-        root = project_path if project_path is not None else Path.cwd()
-        base = root / "docs" / "backlog"
+    """Return the docs/backlog directory. Does not walk upward if project_path is explicitly provided."""
+    if project_path is not None:
+        base = project_path / "docs" / "backlog"
+    else:
+        base = _find_backlog_dir(Path.cwd())
+        if base is None:
+            base = Path.cwd() / "docs" / "backlog"
     if create:
         base.mkdir(parents=True, exist_ok=True)
     return base
@@ -121,8 +124,19 @@ def check_dependencies(
             raise ValueError("Circular dependency detected.")
 
 
+_items_warnings: list[str] = []
+
+
+def get_warnings() -> list[str]:
+    """Get and clear all warnings collected in items module."""
+    global _items_warnings
+    w = list(_items_warnings)
+    _items_warnings.clear()
+    return w
+
+
 def _rebuild_index_silent(project_path: Path | None = None) -> None:
-    """Silently rebuild the INDEX.md file."""
+    """Silently rebuild the INDEX.md file, saving errors to warnings."""
     try:
         content = generate_index(project_path)
         backlog_dir = get_backlog_dir(project_path, create=True)
@@ -130,8 +144,8 @@ def _rebuild_index_silent(project_path: Path | None = None) -> None:
         temp_index_path = index_path.with_suffix(".tmp")
         temp_index_path.write_text(content)
         temp_index_path.replace(index_path)
-    except Exception:
-        pass
+    except Exception as e:
+        _items_warnings.append(f"Failed to rebuild INDEX.md: {e}")
 
 
 @contextlib.contextmanager
@@ -157,6 +171,9 @@ def _load_item(filepath: Path) -> BacklogItem:
         meta = dict(post.metadata)
         meta["id"] = meta.get("id", filepath.stem)
         meta.setdefault("body", post.content)
+        if not meta.get("revision"):
+            import hashlib
+            meta["revision"] = hashlib.md5(filepath.read_bytes()).hexdigest()[:8]
         # Handle date fields: both str and date accepted
         for field in ("created", "updated", "fixed_at"):
             val = meta.get(field)
@@ -225,15 +242,28 @@ def show_item(item_id: str, project_path: Path | None = None) -> BacklogItem | N
 
 
 def next_id(project_name: str, project_path: Path | None = None) -> str:
-    """Generate the next sequential ID for a project."""
+    """Generate the next sequential ID for a project, based on prefix matching with compatibility logic."""
     if not re.match(r"^[a-zA-Z0-9_-]+$", project_name):
         raise ValueError("Invalid project name format")
     prefix = get_project_prefix(project_name)
     items = list_items(project_path)
+    
+    # Extract prefixes of existing items belonging to this project
+    project_items = [item for item in items if item.project == project_name]
+    prefixes = set()
+    for item in project_items:
+        parts = item.id.split("-")
+        if len(parts) > 1:
+            prefixes.add(parts[0])
+            
+    # If there is exactly one existing prefix, reuse it to maintain continuity
+    if len(prefixes) == 1:
+        prefix = list(prefixes)[0]
+
     existing = [
         int(item.id.split("-")[-1])
         for item in items
-        if item.project == project_name and item.id.startswith(prefix)
+        if item.id.startswith(f"{prefix}-")
     ]
     if not existing:
         return f"{prefix}-001"
@@ -243,6 +273,11 @@ def next_id(project_name: str, project_path: Path | None = None) -> str:
 def add_item(item: BacklogItem, project_path: Path | None = None) -> Path:
     """Create a new backlog item file. Returns the file path."""
     with _lock_backlog(project_path):
+        if item.id == "AUTO":
+            item.id = next_id(item.project, project_path)
+        if not item.revision:
+            item.revision = uuid.uuid4().hex[:8]
+
         check_dependencies(item.id, item.depends_on, project_path)
         filepath = get_item_filepath(item.id, project_path, create=True)
         if filepath.exists():
@@ -277,9 +312,9 @@ def _jsonify(value):
 
 
 def update_item(
-    item_id: str, updates: dict, project_path: Path | None = None
+    item_id: str, updates: dict, project_path: Path | None = None, expected_revision: str | None = None
 ) -> BacklogItem | None:
-    """Update a backlog item's frontmatter fields, preserving body."""
+    """Update a backlog item's frontmatter fields, preserving body. Supports expected_revision."""
     with _lock_backlog(project_path):
         if "depends_on" in updates:
             check_dependencies(item_id, updates["depends_on"], project_path)
@@ -290,6 +325,9 @@ def update_item(
         current = show_item(item_id, project_path)
         if current is None:
             return None
+
+        if expected_revision is not None and current.revision != expected_revision:
+            raise ValueError(f"Revision mismatch: expected '{expected_revision}', but current is '{current.revision}'")
 
         body = current.body
         current_data = current.model_dump(mode="json", exclude={"body", "score", "effective_status"}, exclude_none=True)
@@ -302,6 +340,7 @@ def update_item(
             current_data.pop("fixed_at", None)
 
         current_data["updated"] = date.today().isoformat()
+        current_data["revision"] = uuid.uuid4().hex[:8]
 
         extra = current_data.pop("extra", {})
         if extra:
