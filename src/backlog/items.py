@@ -2,7 +2,6 @@
 
 import contextlib
 import fcntl
-import json
 import re
 import uuid
 from datetime import date, datetime
@@ -69,19 +68,6 @@ def get_item_filepath(item_id: str, project_path: Path | None = None, create: bo
 
 
 def get_project_prefix(project_name: str) -> str:
-    """Get project backlog prefix from ~/.config/opencode/projects.json or fallback to project_name[:3].upper()."""
-    registry_path = Path("~/.config/opencode/projects.json").expanduser()
-    if registry_path.exists():
-        try:
-            with open(registry_path) as f:
-                data = json.load(f)
-            projects = data.get("projects", {})
-            if project_name in projects:
-                prefix = projects[project_name].get("backlog_prefix")
-                if prefix:
-                    return prefix.upper()
-        except Exception:
-            pass
     return project_name[:3].upper()
 
 

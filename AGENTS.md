@@ -43,7 +43,7 @@ uv run ruff check .                                      # Lint
 uv run pyright                                           # 类型检查
 
 # 手动测试（以当前项目自身为靶场）
-uv run backlog --dir . list --status todo
-uv run backlog --dir . add -p backlog-cli -t "测试" -c testing --priority P3
-uv run backlog --dir . stats
+uv run backlog list --status todo
+uv run backlog add -T "测试" -c testing --priority P3
+uv run backlog stats
 ```

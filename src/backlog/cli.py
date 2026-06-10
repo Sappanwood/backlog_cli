@@ -35,7 +35,7 @@ from .models import (
 app = typer.Typer(help="Unified backlog manager")
 console = Console()
 stderr_console = Console(stderr=True)
-_project_dir: Path | None = None
+_target_path: Path | None = None
 
 
 def _print_json_success(data: dict | list, warnings: list[str] | None = None) -> None:
@@ -64,17 +64,21 @@ def _print_json_error(code: str, message: str, details: dict | None = None) -> N
 
 @app.callback()
 def main(
-    dir: Annotated[
+    target: Annotated[
         Path | None,
-        typer.Option("--dir", "-d", help="Project directory (default: current dir)"),
+        typer.Option("--target", help="Project root directory (default: auto-detect from cwd)"),
     ] = None,
 ):
-    global _project_dir
-    _project_dir = dir.resolve() if dir else None
+    global _target_path
+    _target_path = target.resolve() if target else None
 
 
-def _project_path() -> Path:
-    return _project_dir or Path.cwd()
+def _resolve_target_path() -> Path:
+    return _target_path or Path.cwd()
+
+
+def _resolve_project_name() -> str:
+    return _resolve_target_path().resolve().name
 
 
 def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
@@ -166,7 +170,6 @@ def _resolve_body(body_str: str | None, body_file: Path | None, stdin: bool) -> 
 
 @app.command(name="list")
 def list_cmd(
-    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     category: Category | None = typer.Option(None, "--category", "-c", help="Filter by category"),
     priority: str | None = typer.Option(None, "--priority", help="Filter by priority (comma-separated, e.g. P0,P1)"),
     status: Status | None = typer.Option(None, "--status", "-s", help="Filter by status"),
@@ -198,7 +201,7 @@ def list_cmd(
             allowed_priorities.append(Priority[p_strip])
 
     try:
-        items = list_items(_project_path())
+        items = list_items(_resolve_target_path())
     except BacklogItemParseError as e:
         if format == "json":
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -206,8 +209,6 @@ def list_cmd(
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
 
-    if project:
-        items = [i for i in items if i.project == project]
     if category:
         items = [i for i in items if i.category == category]
     if allowed_priorities is not None:
@@ -237,7 +238,7 @@ def show(
 ):
     """Show full details of a backlog item."""
     try:
-        item = show_item(item_id, _project_path())
+        item = show_item(item_id, _resolve_target_path())
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -274,7 +275,7 @@ def show(
     if item.tags:
         console.print(f"Tags: {', '.join(item.tags)}")
     if item.depends_on:
-        all_items = {i.id: i for i in list_items(_project_path())}
+        all_items = {i.id: i for i in list_items(_resolve_target_path())}
         dep_statuses = []
         has_blocking = False
         for dep_id in item.depends_on:
@@ -300,8 +301,7 @@ def show(
 
 @app.command()
 def add(
-    project: str = typer.Option(..., "--project", "-p", help="Project name (inkborn, zhijian)"),
-    title: str = typer.Option(..., "--title", "-t", help="Item title"),
+    title: str = typer.Option(..., "--title", "-T", help="Item title"),
     category: Category = typer.Option(..., "--category", "-c", help="Category"),
     priority: Priority = typer.Option(..., "--priority", help="Priority (P0-P3)"),
     effort: Effort | None = typer.Option(None, "--effort", "-e", help="Effort estimate"),
@@ -326,11 +326,12 @@ def add(
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     dep_list = [d.strip() for d in depends_on.split(",") if d.strip()]
     body_content = _resolve_body(body, body_file, stdin) or ""
+    project_name = _resolve_project_name()
 
     try:
         item = BacklogItem(
             id="AUTO",
-            project=project,
+            project=project_name,
             title=title,
             category=category,
             priority=priority,
@@ -341,7 +342,7 @@ def add(
             depends_on=dep_list,
             body=body_content,
         )
-        filepath = add_item(item, _project_path())
+        filepath = add_item(item, _resolve_target_path())
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -439,7 +440,7 @@ def update(
         raise typer.Exit(1)
 
     try:
-        result = update_item(item_id, updates, _project_path(), expected_revision=expected_revision)
+        result = update_item(item_id, updates, _resolve_target_path(), expected_revision=expected_revision)
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -473,21 +474,17 @@ def update(
 
 @app.command()
 def stats(
-    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Show backlog statistics."""
     try:
-        items = list_items(_project_path())
+        items = list_items(_resolve_target_path())
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
         else:
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
-
-    if project:
-        items = [i for i in items if i.project == project]
 
     if not items:
         if json_output:
@@ -559,7 +556,6 @@ def stats(
 
 @app.command(name="next")
 def next_cmd(
-    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     limit: int = typer.Option(5, "--limit", "-n", help="Number of items to show"),
     status: Status = typer.Option(
         Status.TODO, "--status", help="Filter by status (todo/in_progress)"
@@ -573,16 +569,13 @@ def next_cmd(
         raise typer.BadParameter("Limit must be a non-negative integer.")
 
     try:
-        items = list_items(_project_path())
+        items = list_items(_resolve_target_path())
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
         else:
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
-
-    if project:
-        items = [i for i in items if i.project == project]
 
     active = [i for i in items if i.effective_status == status and i.score > 0]
     active.sort(key=lambda x: x.score, reverse=True)
@@ -614,13 +607,12 @@ def next_cmd(
 
 @app.command()
 def index(
-    project: str | None = typer.Option(None, "--project", "-p", help="Filter by project"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Generate docs/backlog/INDEX.md overview."""
     try:
-        content = generate_index(_project_path(), project=project)
-        backlog_dir = get_backlog_dir(_project_path(), create=True)
+        content = generate_index(_resolve_target_path())
+        backlog_dir = get_backlog_dir(_resolve_target_path(), create=True)
         index_path = backlog_dir / INDEX_FILENAME
         index_path.write_text(content)
     except BacklogItemParseError as e:
@@ -649,7 +641,7 @@ def edit(
 ):
     """Open a backlog item in $EDITOR, or replace body via --stdin."""
     try:
-        filepath = get_item_filepath(item_id, _project_path(), create=False)
+        filepath = get_item_filepath(item_id, _resolve_target_path(), create=False)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -660,7 +652,7 @@ def edit(
     if stdin:
         new_body = sys.stdin.read()
         try:
-            result = update_item(item_id, {"body": new_body}, _project_path())
+            result = update_item(item_id, {"body": new_body}, _resolve_target_path())
         except BacklogItemParseError as e:
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1) from e

@@ -1,6 +1,5 @@
 """Unit tests for backlog items CRUD operations."""
 
-import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -576,39 +575,6 @@ class TestDependenciesCheck:
             update_item("TST-001", {"depends_on": ["TST-002"]}, tmp_path)
 
 
-class TestProjectRegistryPrefix:
-    def test_fallback_prefix(self):
-        from backlog.items import get_project_prefix
-        # 假如没有 projects.json，应使用前三个字母大写
-        assert get_project_prefix("someproject") == "SOM"
-
-    def test_registry_prefix(self, tmp_path, monkeypatch):
-        from backlog.items import get_project_prefix
-        # mock 注册表路径，使其在临时目录下
-        fake_registry = tmp_path / "projects.json"
-        fake_registry.write_text(json.dumps({
-            "projects": {
-                "backlog-cli": {
-                    "backlog_prefix": "BCK"
-                }
-            }
-        }))
-        
-        from pathlib import Path as OriginalPath
-        # 保存原始 expanduser
-        orig_expanduser = OriginalPath.expanduser
-
-        def fake_expanduser(self):
-            if "projects.json" in str(self):
-                return fake_registry
-            return orig_expanduser(self)
-            
-        monkeypatch.setattr(OriginalPath, "expanduser", fake_expanduser)
-        assert get_project_prefix("backlog-cli") == "BCK"
-        # 即使找不到别的项目，也应 fallback 成功
-        assert get_project_prefix("inkborn") == "INK"
-
-
 class TestCustomFieldsExtra:
     def test_extra_fields_saved_and_loaded(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
@@ -713,35 +679,5 @@ class TestExactPathScope:
         # 显式传入 subdir 必须精确落在 subdir 之下
         base = get_backlog_dir(subdir)
         assert base == subdir / "docs" / "backlog"
-
-
-class TestPrefixFallbackCompatibility:
-    def test_next_id_fallback_to_existing_single_prefix(self, tmp_path, monkeypatch):
-        import json
-        fake_registry = tmp_path / "projects.json"
-        fake_registry.write_text(json.dumps({
-            "projects": {
-                "backlog-cli": {
-                    "backlog_prefix": "BCK"
-                }
-            }
-        }))
-        
-        from pathlib import Path as OriginalPath
-        orig_expanduser = OriginalPath.expanduser
-
-        def fake_expanduser(self):
-            if "projects.json" in str(self):
-                return fake_registry
-            return orig_expanduser(self)
-            
-        monkeypatch.setattr(OriginalPath, "expanduser", fake_expanduser)
-        
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "BAC-022", project="backlog-cli", title="Old Item")
-        
-        from backlog.items import next_id
-        next_val = next_id("backlog-cli", tmp_path)
-        assert next_val == "BAC-023"
 
 
