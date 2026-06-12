@@ -35,9 +35,10 @@ def _find_backlog_dir(start: Path | None = None) -> Path | None:
 
 
 def get_backlog_dir(project_path: Path | None = None, create: bool = False) -> Path:
-    """Return the docs/backlog directory. Does not walk upward if project_path is explicitly provided."""
+    """Return the backlog directory. Prefer an existing direct backlog for Project Ops targets."""
     if project_path is not None:
-        base = project_path / "docs" / "backlog"
+        direct_backlog = project_path / "backlog"
+        base = direct_backlog if direct_backlog.is_dir() else project_path / "docs" / "backlog"
     else:
         base = _find_backlog_dir(Path.cwd())
         if base is None:

@@ -18,9 +18,11 @@
 |------|--------|----------|
 | [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
-| [docs/plans/plan-20260607-001.md](docs/plans/plan-20260607-001.md) | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 相关 ADR 被接受、最小验证切片得出结论、目标架构方向变化后 |
-| `backlog list --status todo` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后自动 `backlog update --fixed` 标记 |
-| `backlog stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
+| `/home/ling/workspace/project-ops/backlog-cli/backlog/` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
+| `/home/ling/workspace/project-ops/backlog-cli/plans/` | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 新增或更新执行计划时 |
+| `/home/ling/workspace/project-ops/backlog-cli/research/` | 查阅项目级调研证据时 | 完成项目级调研时 |
+| `backlog --target /home/ling/workspace/project-ops/backlog-cli list --status todo` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后自动 `update --fixed` 标记 |
+| `backlog --target /home/ling/workspace/project-ops/backlog-cli stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
 
 ## 项目速览
 
@@ -43,7 +45,7 @@ uv run ruff check .                                      # Lint
 uv run pyright                                           # 类型检查
 
 # 手动测试（以当前项目自身为靶场）
-uv run backlog list --status todo
-uv run backlog add -T "测试" -c testing --priority P3
-uv run backlog stats
+uv run backlog --target /home/ling/workspace/project-ops/backlog-cli list --status todo
+uv run backlog --target /home/ling/workspace/project-ops/backlog-cli add -T "测试" -c testing --priority P3
+uv run backlog --target /home/ling/workspace/project-ops/backlog-cli stats
 ```

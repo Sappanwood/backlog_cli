@@ -46,7 +46,7 @@ def _print_json_success(data: dict | list, warnings: list[str] | None = None) ->
     }
     if warnings is not None:
         output["warnings"] = warnings
-    print(json.dumps(output, indent=2))
+    print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
 def _print_json_error(code: str, message: str, details: dict | None = None) -> None:
@@ -59,7 +59,7 @@ def _print_json_error(code: str, message: str, details: dict | None = None) -> N
             "details": details or {},
         }
     }
-    print(json.dumps(output, indent=2))
+    print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
 @app.callback()

@@ -8,7 +8,7 @@
 flowchart TD
     CLI[cli.py - Typer CLI] --> Items[items.py - CRUD & I/O]
     Items --> Models[models.py - Data Models]
-    Items --> FS[(docs/backlog/items/*.md)]
+    Items --> FS[(backlog/items/*.md or docs/backlog/items/*.md)]
     CLI --> Rich[Rich Console/Tables]
 ```
 
@@ -27,7 +27,8 @@ flowchart TD
 ### 数据存储
 
 ```
-<project-root>/docs/backlog/
+<target>/backlog/              # Project Ops target，存在时优先
+<target>/docs/backlog/         # Repo target 默认路径
 ├── INDEX.md              # generate_index() 自动生成
 └── items/
     ├── ZHI-001.md         # 每项一个文件
@@ -60,7 +61,7 @@ Markdown 正文（body）
 
 ### 项目发现流程
 
-- **显式传入 `project_path`（如指定 `--dir` 参数）**：严格定位到 `project_path / docs / backlog /` 下，不会向上寻找。未找到时在该路径下创建。
+- **显式传入 `project_path`（如指定 `--target` 参数）**：若 `project_path / backlog /` 已存在则优先使用；否则定位到 `project_path / docs / backlog /`。不会向上寻找。
 - **未传入 `project_path`**：调用 `_find_backlog_dir(start)` 从当前工作目录（CWD）向上逐级查找 `docs/backlog/`，找到即返回；若查找到根目录依然没有，则在当前工作目录下创建 `docs/backlog/`。
 
 ### 推荐排序

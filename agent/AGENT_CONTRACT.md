@@ -1,7 +1,7 @@
 # Backlog CLI — AI Agent 操作手册
 
 本文档是 AI 使用 `backlog` 工具的标准契约。backlog 是一个轻量级任务管理 CLI，
-每个条目对应一个 `docs/backlog/items/<ID>.md` 文件，使用 YAML frontmatter
+每个条目对应一个 `<backlog-root>/items/<ID>.md` 文件，使用 YAML frontmatter
 承载结构化数据（优先级、分类、状态等），Markdown 正文承载描述。
 
 ## 0. 项目定位
@@ -35,8 +35,8 @@ backlog <子命令>
 backlog --target <项目根路径> <子命令>
 ```
 
-`--target` 指定目标项目根目录。若该目录或其父级已有 `docs/backlog/`，工具会复用；
-否则会在 `--target` 指向的目录下创建 `docs/backlog/`。
+`--target` 指定目标目录。若该目录下已有 `backlog/`，工具优先将其作为
+Project Ops backlog；否则使用或创建该目录下的 `docs/backlog/`。
 
 不传 `--target` 时，工具从 cwd 向上查找 `docs/backlog/` 目录自动定位。
 
@@ -133,13 +133,14 @@ score = priority_weight × impact_weight × effort_weight
 
 ## 6. 跨项目使用
 
-通过 `--target` 参数切换目标项目。每个项目在其根目录维护独立的 `docs/backlog/`：
+通过 `--target` 参数切换目标。Repo 默认维护 `docs/backlog/`；Project Ops 项目目录
+预先创建 `backlog/` 后，工具会优先使用该目录：
 
 ```bash
 # 对多个项目执行操作
-backlog --target ~/inkborn list --status todo
-backlog --target ~/ai/ZhiJian stats --json
-backlog --target ~/ai/backlog-cli next -n 3 --json
+backlog --target ~/workspace/project-ops/inkborn list --status todo
+backlog --target ~/workspace/project-ops/ZhiJian stats --json
+backlog --target ~/workspace/project-ops/backlog-cli next -n 3 --json
 ```
 
 操作前先 `git status --short` 检查目标项目工作区是否干净，避免冲突。

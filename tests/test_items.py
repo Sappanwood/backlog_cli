@@ -13,6 +13,7 @@ from backlog.items import (
     _load_item,
     add_item,
     generate_index,
+    get_backlog_dir,
     get_item_filepath,
     get_items_dir,
     list_items,
@@ -85,6 +86,17 @@ class TestFindBacklogDir:
         result = _find_backlog_dir(tmp_path)
         assert result is not None
         assert result.name == "backlog"
+
+
+class TestGetBacklogDir:
+    def test_prefers_existing_direct_backlog_dir(self, tmp_path):
+        direct_backlog = tmp_path / "backlog"
+        direct_backlog.mkdir()
+
+        assert get_backlog_dir(tmp_path) == direct_backlog
+
+    def test_defaults_to_docs_backlog_for_existing_projects(self, tmp_path):
+        assert get_backlog_dir(tmp_path) == tmp_path / "docs" / "backlog"
 
     def test_finds_from_subdir(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
@@ -679,5 +691,4 @@ class TestExactPathScope:
         # 显式传入 subdir 必须精确落在 subdir 之下
         base = get_backlog_dir(subdir)
         assert base == subdir / "docs" / "backlog"
-
 

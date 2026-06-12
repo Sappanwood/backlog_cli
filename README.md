@@ -1,13 +1,14 @@
 # Backlog CLI
 
 Backlog CLI is a lightweight file-based task tracker for projects. It stores each item as a Markdown file under
-`docs/backlog/items/`, with YAML frontmatter for structured fields and Markdown body text for context.
+`backlog/items/` for Project Ops targets or `docs/backlog/items/` for repository targets, with YAML frontmatter
+for structured fields and Markdown body text for context.
 
 The tool is designed for both human developers and AI agents:
 
 - humans get readable Markdown files and git-friendly diffs
 - agents get stable commands, JSON output, and a documented operation contract
-- projects keep backlog data inside their own repository, without a database
+- backlog data can live in a Project Ops directory or inside a repository, without a database
 
 ## Install
 

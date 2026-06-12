@@ -25,6 +25,7 @@ name = "backlog-cli"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "pydantic" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
@@ -42,6 +43,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.0" },
     { name = "pydantic", specifier = ">=2.10" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
