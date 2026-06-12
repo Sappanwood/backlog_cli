@@ -6,20 +6,16 @@
 
 ## 0. 项目定位
 
-`backlog` 自动从当前工作目录向上查找 `docs/backlog/` 确定目标项目。
-需要明确指定时，使用 `--target <项目根路径>` 全局选项。
+处理已注册项目时，先运行 `project-ops resolve <Repo 路径> --json`，将稳定 JSON 契约中的
+`data.ops` 作为 `<ops-path>`，再使用 `--target <ops-path>`。只有处理未注册的独立 Repo
+时，才依赖 `backlog` 从当前工作目录向上查找 `docs/backlog/`。
 
 ```bash
-# 在项目目录内直接使用（自动发现）
-cd ~/ai/backlog-cli && backlog list --status todo
+# 解析已注册项目
+project-ops resolve <Repo 路径> --json
 
-# 明确指定目标目录
-backlog --target ~/ai/backlog-cli list --status todo
-
-# 跨项目批量操作
-for repo in ~/inkborn ~/ai/ZhiJian ~/ai/backlog-cli; do
-  backlog --target "$repo" list --status todo
-done
+# 使用输出中的 data.ops
+backlog --target <ops-path> list --status todo
 ```
 
 ## 1. 调用范式
@@ -133,14 +129,13 @@ score = priority_weight × impact_weight × effort_weight
 
 ## 6. 跨项目使用
 
-通过 `--target` 参数切换目标。Repo 默认维护 `docs/backlog/`；Project Ops 项目目录
-预先创建 `backlog/` 后，工具会优先使用该目录：
+通过 `--target` 参数切换目标。已注册项目先使用 `project-ops resolve <Repo 路径> --json`
+解析，并将输出中的 `data.ops` 作为 `<ops-path>`。不得自行读取注册表、拼接 Project Ops
+路径或使用固定路径 fallback。
 
 ```bash
-# 对多个项目执行操作
-backlog --target ~/workspace/project-ops/inkborn list --status todo
-backlog --target ~/workspace/project-ops/ZhiJian stats --json
-backlog --target ~/workspace/project-ops/backlog-cli next -n 3 --json
+project-ops resolve <Repo 路径> --json
+backlog --target <ops-path> stats --json
 ```
 
 操作前先 `git status --short` 检查目标项目工作区是否干净，避免冲突。
