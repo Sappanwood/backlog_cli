@@ -10,7 +10,7 @@
 - 依赖最小化：Typer (CLI) + Pydantic (模型) + python-frontmatter (序列化) + Rich (输出) + PyYAML
 - 每层只做一件事：models (数据) → items (存储) → cli (展示)
 - 文件系统存储，不引入数据库
-- 变更后运行 `uv run ruff check . && uv run pyright` 确保通过
+- 变更后运行 `uv run pytest && uv run ruff check . && uv run pyright` 确保通过
 
 ## 路由表
 
@@ -37,10 +37,11 @@ src/backlog/
 
 ```bash
 # 开发环境
-uv sync                                                  # 安装依赖
+uv sync                                                  # 安装依赖（包含 dev dependency group）
 uv run backlog --help                                    # 查看命令帮助
 
 # 代码质量
+uv run pytest                                            # 测试
 uv run ruff check .                                      # Lint
 uv run pyright                                           # 类型检查
 
