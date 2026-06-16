@@ -103,6 +103,7 @@ class TestBacklogItem:
         assert item.fixed_at is None
         assert item.tags == []
         assert item.depends_on == []
+        assert item.related_docs == []
         assert item.body == ""
 
     def test_all_fields(self):
@@ -120,6 +121,7 @@ class TestBacklogItem:
             fixed_at=today,
             tags=["urgent", "frontend"],
             depends_on=["TST-001"],
+            related_docs=["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"],
             created=today,
             updated=today,
             body="Some markdown body.",
@@ -131,6 +133,7 @@ class TestBacklogItem:
         assert item.fixed_at == today
         assert item.tags == ["urgent", "frontend"]
         assert item.depends_on == ["TST-001"]
+        assert item.related_docs == ["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"]
         assert item.body == "Some markdown body."
 
     def test_missing_required_raises(self):

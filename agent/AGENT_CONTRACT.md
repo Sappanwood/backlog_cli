@@ -50,6 +50,7 @@ Project Ops backlog；否则使用或创建该目录下的 `docs/backlog/`。
 | 标记完成 | `update <ID> --fixed` |
 | 取消/关闭 | `update <ID> -s cancelled` |
 | 设置依赖关系 | `update <ID> --depends-on INK-001,INK-002` |
+| 设置相关文档 | `update <ID> --related-docs docs/ARCHITECTURE.md,project-ops:plans/plan.md` |
 | 新增条目 | `add -T "标题" -c <category> --priority P1 -b "一句话描述" [-e S] [-i high]` |
 | 新增条目(多行正文) | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md` |
 | 通过管道新增 | `cat body.md \| backlog add ... --stdin` |
@@ -76,6 +77,7 @@ status: todo           # todo | in_progress | done | cancelled | blocked
 source: ""             # 来源标签（如 ui-audit-2026-04-27）
 tags: [tag1, tag2]
 depends_on: []         # 前置依赖的条目 ID
+related_docs: []       # 相关文档逻辑引用，如 docs/ARCHITECTURE.md 或 project-ops:plans/plan.md
 fixed_at: null         # 完成日期；仅 status=done 时有效（--fixed 自动设为今天）
 created: "2026-04-27"
 updated: "2026-04-27"
@@ -112,6 +114,8 @@ score = priority_weight × impact_weight × effort_weight
 - **强烈建议同时提供 `-b "描述"`**：一句话说明条目的背景/目的/验收标准，让 `show` 和 `--json` 输出有实质内容。无描述的条目在列表视图中信息密度过低
 - **ID 自动生成**：格式为 `<目录名前3字母大写>-<三位序号>`，如 `zhijian/` 目录→ZHI-001
 - **更新字段**：`update` 只修改你明确传入的字段，其余保持不变
+- **相关文档**：`related_docs` 保存与条目相关的 Repo 文档或 Project Ops artifact 逻辑引用。使用
+  `--related-docs` 传入逗号分隔列表；该操作替换整个列表。CLI 只做 trim/去空，不检查路径是否存在。
 - **`--fixed` 是快捷方式**：等于 `-s done` + 自动填写 `fixed_at`
 - **状态机约束**：`fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`
 - **依赖阻碍状态解耦**：具有未完成前置依赖的条目，在读取/渲染视图时其有效状态（`effective_status`）为 `blocked`，但在底层 Markdown 数据中仍保持其声明状态（如 `todo` / `in_progress`）。对该条目的更新操作不会将计算出的临时 `blocked` 状态持久化固化，当前置依赖完成时，该任务将自动恢复为正常的可进行状态。

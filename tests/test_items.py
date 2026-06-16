@@ -43,6 +43,7 @@ def _write_item(items_dir: Path, item_id: str, **overrides) -> Path:
         "source": "",
         "tags": [],
         "depends_on": [],
+        "related_docs": [],
         "created": "2026-04-27",
         "updated": "2026-04-27",
     }
@@ -270,6 +271,7 @@ class TestAddItem:
             id="TST-001", project="test", title="Hello",
             category=Category.BUG, priority=Priority.P0,
             tags=["a", "b"], depends_on=["DEP-001"],
+            related_docs=["docs/ARCHITECTURE.md", "project-ops:research/topic.md"],
             body="## Body\nSome text.",
         )
         add_item(item, tmp_path)
@@ -278,6 +280,7 @@ class TestAddItem:
         assert loaded.title == "Hello"
         assert loaded.tags == ["a", "b"]
         assert loaded.depends_on == ["DEP-001"]
+        assert loaded.related_docs == ["docs/ARCHITECTURE.md", "project-ops:research/topic.md"]
         assert "## Body" in loaded.body
 
 
@@ -289,6 +292,21 @@ class TestUpdateItem:
         assert result is not None
         assert result.title == "New title"
         assert result.status == Status.IN_PROGRESS
+
+    def test_updates_related_docs(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001", related_docs=["docs/OLD.md"])
+        result = update_item(
+            "TST-001",
+            {"related_docs": ["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"]},
+            tmp_path,
+        )
+        assert result is not None
+        assert result.related_docs == ["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"]
+
+        loaded = show_item("TST-001", tmp_path)
+        assert loaded is not None
+        assert loaded.related_docs == ["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"]
 
     def test_preserves_body(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
@@ -691,4 +709,3 @@ class TestExactPathScope:
         # 显式传入 subdir 必须精确落在 subdir 之下
         base = get_backlog_dir(subdir)
         assert base == subdir / "docs" / "backlog"
-

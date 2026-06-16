@@ -88,6 +88,7 @@ class BacklogItem(BaseModel):
     fixed_at: date | None = None
     tags: list[str] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
+    related_docs: list[str] = Field(default_factory=list)
     created: date = Field(default_factory=lambda: date.today())
     updated: date = Field(default_factory=lambda: date.today())
     body: str = ""

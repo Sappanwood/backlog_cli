@@ -36,6 +36,7 @@ def _write_item(items_dir: Path, item_id: str, **overrides):
         "source": "",
         "tags": [],
         "depends_on": [],
+        "related_docs": [],
         "created": "2026-04-27",
         "updated": "2026-04-27",
     }
@@ -156,6 +157,16 @@ class TestShowCommand:
         assert "Depends on" in result.stdout
         assert "TST-001" in result.stdout
 
+    def test_show_with_related_docs(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001", related_docs=["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"])
+        result = runner.invoke(app, [*_target_flag(project_path), "show", "TST-001"])
+        assert result.exit_code == 0
+        assert "Related docs" in result.stdout
+        assert "docs/ARCHITECTURE.md" in result.stdout
+        assert "project-ops:plans/plan.md" in result.stdout
+
 
 class TestAddCommand:
     def test_add_item(self, runner, tmp_path):
@@ -204,6 +215,25 @@ class TestAddCommand:
         ])
         assert result.exit_code == 0
 
+    def test_add_with_related_docs_json(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        result = runner.invoke(app, [
+            *(_target_flag(project_path)),
+            "add",
+            "--title", "Has docs",
+            "--category", "feature",
+            "--priority", "P1",
+            "--related-docs", "docs/ARCHITECTURE.md, project-ops:research/topic.md",
+            "--json",
+        ])
+        assert result.exit_code == 0
+        item_id = json.loads(result.stdout)["data"]["id"]
+
+        show_result = runner.invoke(app, [*_target_flag(project_path), "show", item_id, "--json"])
+        assert show_result.exit_code == 0
+        item = json.loads(show_result.stdout)["data"]
+        assert item["related_docs"] == ["docs/ARCHITECTURE.md", "project-ops:research/topic.md"]
+
 
 class TestUpdateCommand:
     def test_update_title(self, runner, tmp_path):
@@ -220,6 +250,22 @@ class TestUpdateCommand:
         _write_item(items_dir, "TST-001")
         result = runner.invoke(app, [*_target_flag(project_path), "update", "TST-001", "--status", "in_progress"])
         assert result.exit_code == 0
+
+    def test_update_related_docs(self, runner, tmp_path):
+        project_path = _make_backlog(tmp_path)
+        items_dir = project_path / "docs" / "backlog" / "items"
+        _write_item(items_dir, "TST-001", related_docs=["docs/OLD.md"])
+        result = runner.invoke(app, [
+            *_target_flag(project_path),
+            "update",
+            "TST-001",
+            "--related-docs",
+            "docs/ARCHITECTURE.md,project-ops:plans/plan.md",
+            "--json",
+        ])
+        assert result.exit_code == 0
+        item = json.loads(result.stdout)["data"]
+        assert item["related_docs"] == ["docs/ARCHITECTURE.md", "project-ops:plans/plan.md"]
 
     def test_update_fixed(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
@@ -456,4 +502,3 @@ class TestCLIValidationAndSecurity:
             assert excinfo.value.code == 1
         finally:
             sys.argv = orig_argv
-

@@ -95,6 +95,7 @@ class BacklogItem(BaseModel):
     effort: Effort
     impact: Impact
     status: Status
+    related_docs: list[str]
     revision: str  # 乐观锁版本指纹 (UUID hex 前8位)
     ...
     score: float  # @computed_field

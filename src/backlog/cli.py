@@ -168,6 +168,10 @@ def _resolve_body(body_str: str | None, body_file: Path | None, stdin: bool) -> 
     return body_str
 
 
+def _parse_csv_list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @app.command(name="list")
 def list_cmd(
     category: Category | None = typer.Option(None, "--category", "-c", help="Filter by category"),
@@ -274,6 +278,8 @@ def show(
     console.print(f"Project: {item.project}  |  Source: {item.source or '-'}")
     if item.tags:
         console.print(f"Tags: {', '.join(item.tags)}")
+    if item.related_docs:
+        console.print(f"Related docs: {', '.join(item.related_docs)}")
     if item.depends_on:
         all_items = {i.id: i for i in list_items(_resolve_target_path())}
         dep_statuses = []
@@ -309,6 +315,7 @@ def add(
     tags: str = typer.Option("", "--tags", help="Comma-separated tags"),
     source: str = typer.Option("", "--source", help="Source label"),
     depends_on: str = typer.Option("", "--depends-on", help="Comma-separated dependency IDs"),
+    related_docs: str = typer.Option("", "--related-docs", help="Comma-separated related document references"),
     body: str | None = typer.Option(None, "--body", "-b", help="Description body (markdown)"),
     body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
     stdin: bool = typer.Option(False, "--stdin", help="Read body from stdin"),
@@ -323,8 +330,9 @@ def add(
         impact = Impact.MEDIUM
         applied_defaults.append("impact (medium)")
 
-    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-    dep_list = [d.strip() for d in depends_on.split(",") if d.strip()]
+    tag_list = _parse_csv_list(tags)
+    dep_list = _parse_csv_list(depends_on)
+    related_doc_list = _parse_csv_list(related_docs)
     body_content = _resolve_body(body, body_file, stdin) or ""
     project_name = _resolve_project_name()
 
@@ -340,6 +348,7 @@ def add(
             tags=tag_list,
             source=source,
             depends_on=dep_list,
+            related_docs=related_doc_list,
             body=body_content,
         )
         filepath = add_item(item, _resolve_target_path())
@@ -392,6 +401,9 @@ def update(
     tags: str | None = typer.Option(None, "--tags", help="Comma-separated tags (replaces)"),
     source: str | None = typer.Option(None, "--source", help="New source label"),
     depends_on: str | None = typer.Option(None, "--depends-on", help="Comma-separated dependency IDs (replaces)"),
+    related_docs: str | None = typer.Option(
+        None, "--related-docs", help="Comma-separated related document references (replaces)"
+    ),
     fixed: bool = typer.Option(False, "--fixed", "-f", help="Mark as done with today's date (shorthand)"),
     body: str | None = typer.Option(None, "--body", "-b", help="New body text"),
     body_file: Path | None = typer.Option(None, "--body-file", help="Read body from file"),
@@ -420,11 +432,13 @@ def update(
     if status is not None:
         updates["status"] = status
     if tags is not None:
-        updates["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+        updates["tags"] = _parse_csv_list(tags)
     if source is not None:
         updates["source"] = source
     if depends_on is not None:
-        updates["depends_on"] = [d.strip() for d in depends_on.split(",") if d.strip()]
+        updates["depends_on"] = _parse_csv_list(depends_on)
+    if related_docs is not None:
+        updates["related_docs"] = _parse_csv_list(related_docs)
     if body_content is not None:
         updates["body"] = body_content
     if fixed:
