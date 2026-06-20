@@ -86,9 +86,11 @@ score = priority_weight * impact_weight * effort_weight
 
 ## AI Agent Contract
 
-AI agents should use [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) as the command and behavior contract.
-That document is the source of truth for agent-safe invocation patterns, JSON parsing, status transitions, and
-cross-project usage.
+AI agents should use the repo-owned skill at [skills/backlog/SKILL.md](skills/backlog/SKILL.md) as the command
+and behavior contract. That document is the source of truth for agent-safe invocation patterns, JSON parsing,
+status transitions, and cross-project usage.
+
+[agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) remains as a compatibility redirect for older links.
 
 Project architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

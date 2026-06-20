@@ -13,6 +13,14 @@ metadata:
 
 # Backlog — CLI 任务管理
 
+本文档是 AI Agent 使用 `backlog` 工具的标准契约，也是 repo-owned skill 的单一源头。
+全局 skill 入口应通过 symlink 指向本目录，避免在全局配置中复制维护另一份说明。
+
+`backlog` 是轻量级任务管理 CLI。每个条目对应
+`<backlog-root>/items/<ID>.md`，使用 YAML frontmatter 承载结构化数据，Markdown 正文承载
+「为什么 / 做什么 / 如何验证」描述。CLI 负责 ID 生成、frontmatter 更新、状态流转、统计和
+`INDEX.md` 重建。
+
 ## 触发时机
 
 当任务涉及 backlog 管理时加载本 skill：
@@ -23,35 +31,23 @@ metadata:
 - 当前开发任务明确对应某个 backlog ID，需要开始、完成或更新该条目
 - 在项目开发过程中确认发现了新的 bug、技术债或后续任务，且值得跨会话保留
 
-不要因为普通问答或只读解释自动查询 backlog；只有进入项目开发、计划、任务选择或 backlog CRUD 场景时才主动操作。
-
-## 核心原则
-
-加载本 skill 后，先用 `project-ops list --json` 获取 `id == "backlog-cli"` 的
-`data.projects[]` 条目，将其 `repo` 记为 `<backlog-cli-repo>`，再读取
-`<backlog-cli-repo>/agent/AGENT_CONTRACT.md` 获取完整契约。该文档是单一源头，包含：
-- 全部子命令与选项
-- 数据模型与字段
-- 评分排序规则
-- 操作约定与禁区
-
-本 skill 只定义调用范式和自动行为边界；命令细节以 `AGENT_CONTRACT.md` 为准。
-
-条目正文位于 `<ops-path>/backlog/items/<ID>.md`，便于 review 和搜索；CLI 负责 ID 生成、frontmatter 更新、状态流转、统计和 `INDEX.md` 重建。
-
-如果 CLI 不可用，才回退为直接编辑 `<ops-path>/backlog/items/*.md`；回退后必须用等价方式同步 `<ops-path>/backlog/INDEX.md`，并在回复中说明未能使用 CLI。
+不要因为普通问答或只读解释自动查询 backlog；只有进入项目开发、计划、任务选择或 backlog
+CRUD 场景时才主动操作。
 
 ## Project Ops 路径解析
 
-所有 backlog 操作前，运行：
+所有已注册项目的 backlog 操作前，运行：
 
 ```bash
 project-ops resolve <目标路径> --json
 ```
 
 确认输出 `ok` 为 `true`，将 `data.ops` 记为 `<ops-path>`，将 `data.repo` 记为目标 Repo。
-命令返回 `PROJECT_NOT_FOUND` 或其他错误时停止，不得回退到 Repo 内创建
-`docs/backlog/`。不得自行读取注册表、解释 `workspace_root`、拼接路径或按目录名猜测项目。
+命令返回 `PROJECT_NOT_FOUND` 或其他错误时停止，不得回退到 Repo 内创建 `docs/backlog/`。
+不得自行读取注册表、解释 `workspace_root`、拼接路径或按目录名猜测项目。
+
+只有处理未注册的独立 Repo 时，才允许依赖 `backlog` 从当前工作目录向上查找
+`docs/backlog/`。
 
 ## 调用范式
 
@@ -64,15 +60,44 @@ backlog --target <ops-path> <子命令>
 `--target` 必须指定注册表解析出的 `<ops-path>`。backlog-cli 会在其下管理 `backlog/`。
 
 若 PATH 中的 `backlog` 入口不可用或模块环境损坏，先用 `project-ops list --json` 获取
-`id == "backlog-cli"` 的 `repo`，再使用：
+`id == "backlog-cli"` 的 `data.projects[]` 条目，将其 `repo` 记为 `<backlog-cli-repo>`，
+再使用：
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target <ops-path> <子命令>
 ```
 
 `<backlog-cli-repo>` 必须来自稳定 JSON 契约，不得使用历史固定路径。若 `project-ops` CLI
-不可用则停止并报告，不能回退实现注册表解析；若 backlog fallback 也不可用，才回退为
-直接编辑 backlog 文件。
+不可用则停止并报告，不能回退实现注册表解析；若 backlog fallback 也不可用，才回退为直接编辑
+`<ops-path>/backlog/items/*.md`。回退后必须用等价方式同步 `<ops-path>/backlog/INDEX.md`，
+并在回复中说明未能使用 CLI。
+
+## 命令速查
+
+| 意图 | 命令 |
+|------|------|
+| 查看所有待办 | `list --status todo` |
+| 按优先级过滤 | `list --priority P0,P1 --status todo` |
+| 按分类过滤 | `list -c bug --status todo` |
+| 查看推荐做啥 | `next -n 5` |
+| 查看推荐 (JSON) | `next -n 5 --json` |
+| 查看完整条目 | `show <ID>` |
+| 开始做一条 | `update <ID> -s in_progress` |
+| 标记完成 | `update <ID> --fixed` |
+| 取消/关闭 | `update <ID> -s cancelled` |
+| 设置依赖关系 | `update <ID> --depends-on INK-001,INK-002` |
+| 设置相关文档 | `update <ID> --related-docs docs/ARCHITECTURE.md,project-ops:plans/plan.md` |
+| 新增条目 | `add -T "标题" -c <category> --priority P1 -b "一句话描述" [-e S] [-i high]` |
+| 新增条目(多行正文) | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md` |
+| 通过管道新增 | `cat body.md \| backlog add ... --stdin` |
+| 更新条目字段 | `update <ID> --title "新标题" --priority P2 [-b "更新后的描述"]` |
+| 替换正文(文件) | `update <ID> --body-file /tmp/body.md` |
+| 替换正文(管道) | `cat body.md \| backlog update <ID> --stdin` |
+| 编辑正文(管道) | `cat body.md \| backlog edit <ID> --stdin` |
+| 查看统计 | `stats` |
+| 查看统计 (JSON) | `stats --json` |
+| 生成总览索引 | `index` |
+| 编辑正文(交互) | `edit <ID>` |
 
 ## 自动行为边界
 
@@ -103,7 +128,7 @@ backlog --target <ops-path> index
 
 ### 完成已知条目
 
-只有当当前任务明确对应某个 backlog ID，且代码/文档/测试验收已完成时，才标记完成：
+只有当当前任务明确对应某个 backlog ID，且代码、文档、测试验收已完成时，才标记完成：
 
 ```bash
 backlog --target <ops-path> update <ID> --fixed
@@ -131,25 +156,106 @@ backlog --target <ops-path> index
 backlog --target <ops-path> stats
 ```
 
-## 常用命令
+## 数据模型
+
+```yaml
+id: "ZHI-001"          # 自动生成：项目目录名前3字母大写 + 三位序号
+project: "zhijian"     # 项目标识（自动取自目标目录名）
+title: "标题"
+category: feature      # bug | a11y | ux | i18n | testing | feature | refactor | perf | docs | architecture | security | research | ops
+priority: P1           # P0(最高/影响发布) > P1(严重) > P2(中等) > P3(低)
+effort: M              # XS | S | M | L | XL
+impact: high           # high | medium | low
+status: todo           # todo | in_progress | done | cancelled | blocked
+source: ""             # 来源标签（如 ui-audit-2026-04-27）
+tags: [tag1, tag2]
+depends_on: []         # 前置依赖的条目 ID
+related_docs: []       # 相关文档逻辑引用，如 docs/ARCHITECTURE.md 或 project-ops:plans/plan.md
+fixed_at: null         # 完成日期；仅 status=done 时有效（--fixed 自动设为今天）
+created: "2026-04-27"
+updated: "2026-04-27"
+```
+
+`body` 字段存于 YAML frontmatter 之外，不在 frontmatter 区块内。`show <ID>` 会完整展示正文。
+
+## 排序规则
+
+`next` 和 `list --sort score` 使用的推荐分数：
+
+```text
+score = priority_weight * impact_weight * effort_weight
+```
+
+| Priority | Weight | Impact | Weight | Effort | Weight |
+|----------|--------|--------|--------|--------|--------|
+| P0 | 100 | high | 3 | XS | 10.0 |
+| P1 | 50 | medium | 2 | S | 5.0 |
+| P2 | 10 | low | 1 | M | 2.0 |
+| P3 | 1 | | | L | 1.0 |
+| | | | | XL | 0.5 |
+
+高影响 + 小工作量的条目排最前。done/cancelled 条目 score=0。
+
+- `list --sort score`：按 score 展示所有匹配条目，包含 `blocked`
+- `next`：只推荐 `todo` / `in_progress`，排除 `blocked`、`done`、`cancelled`
+- `list --json` 与 `next --json`：每个条目包含 `score` 字段，供 Agent 解释推荐依据
+
+## 操作约定
+
+- 新增条目时必须提供 `-T`（标题）、`-c`（分类）、`--priority`（优先级）。项目名自动从目标目录名推导。
+- 强烈建议同时提供 `-b "描述"`：一句话说明背景、目的或验收标准。
+- ID 自动生成：格式为 `<目录名前3字母大写>-<三位序号>`，如 `zhijian/` 目录生成 `ZHI-001`。
+- `update` 只修改明确传入的字段，其余保持不变。
+- `related_docs` 保存与条目相关的 Repo 文档或 Project Ops artifact 逻辑引用。`--related-docs` 传入逗号分隔列表并替换整个列表。CLI 只做 trim/去空，不检查路径是否存在。
+- `--fixed` 是快捷方式，等于 `-s done` + 自动填写 `fixed_at`。
+- `fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`。
+- 具有未完成前置依赖的条目，在读取/渲染视图时有效状态 `effective_status` 为 `blocked`，但底层 Markdown 数据仍保持其声明状态。更新操作不会将计算出的临时 `blocked` 状态持久化。
+- 所有带 `--json`（或 `--format json`）选项的命令成功时输出 `{"ok": true, "data": ...}`；失败时输出 `{"ok": false, "error": {"code": "...", "message": "...", "details": {}}}`。常见错误码包括 `PARSING_ERROR`、`ITEM_CONFLICT`、`ITEM_NOT_FOUND`、`INVALID_INPUT`。
+- 单行简短正文使用 `-b "一句话描述"`；多行正文使用 `--body-file /tmp/body.md` 或 `--stdin`。
+- 禁止通过 `-b "line1\nline2"` 传递多行，`\n` 不会被 shell 展开。
+- `--stdin` 和 `--body-file` 为二进制安全通道。
+- 非 TTY 环境中 `edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`。
+- `next --json` 返回与 `list --json` 一致的结构化输出，供 Agent 解析推荐列表。
+- 每个条目均在 frontmatter 包含 `revision` 数据指纹。使用 `update` 修改条目时，可传入 `--expected-revision <REV>` 进行乐观锁校验。
+- 新增条目时无需前置在外部计算 ID，底层在安全锁内计算 `next_id()`，能避免多 Agent 并发写入时分配重复 ID。
+
+## 跨项目使用
+
+通过 `--target` 参数切换目标。已注册项目先使用 `project-ops resolve <Repo 路径> --json`
+解析，并将输出中的 `data.ops` 作为 `<ops-path>`。不得自行读取注册表、拼接 Project Ops 路径或使用固定路径 fallback。
+
+```bash
+project-ops resolve <Repo 路径> --json
+backlog --target <ops-path> stats --json
+```
+
+操作前先 `git status --short` 检查目标项目工作区状态，避免覆盖用户正在编辑的内容。
+
+## 常用组合
 
 ```bash
 # 列出 todo
-backlog list --status todo
+backlog --target <ops-path> list --status todo
 
 # 推荐下一批
-backlog next -n 5
+backlog --target <ops-path> next -n 5
 
 # 查看条目
-backlog show <ID>
+backlog --target <ops-path> show <ID>
 
 # 新增条目
-backlog add -T "标题" -c feature --priority P1 -e M -i high -b "一句话描述"
+backlog --target <ops-path> add -T "标题" -c feature --priority P1 -e M -i high -b "一句话描述"
+
+# 新增条目（多行正文）
+backlog --target <ops-path> add -T "标题" -c feature --priority P1 --body-file /tmp/body.md
 
 # 更新字段
-backlog update <ID> --priority P2
+backlog --target <ops-path> update <ID> --priority P2
 
 # 完成条目并重建索引
-backlog update <ID> --fixed
-backlog index
+backlog --target <ops-path> update <ID> --fixed
+backlog --target <ops-path> index
+
+# 获取推荐列表 JSON
+backlog --target <ops-path> next -n 3 --json
 ```

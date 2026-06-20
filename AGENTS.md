@@ -1,8 +1,9 @@
 # AGENTS.md — Backlog CLI 开发路由中枢
 
 > 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具：
-> - 系统 skill `backlog`（薄层代理，位于 `~/.config/opencode/skills/backlog/SKILL.md`）自动装载调用范式和自动行为规则
-> - 然后指示读取 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) 获取完整命令、字段、约定 — **该文档是单一源头**
+> - 读取 repo-owned skill [skills/backlog/SKILL.md](skills/backlog/SKILL.md)
+> - 全局 skill 入口应通过 symlink 指向该目录；不要复制维护另一份说明
+> - 旧入口 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) 仅保留为兼容跳转
 
 ## 绝对红线
 
@@ -16,7 +17,8 @@
 
 | 文档 | 何时读 | 何时更新 |
 |------|--------|----------|
-| [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
+| [skills/backlog/SKILL.md](skills/backlog/SKILL.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
+| [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 旧链接兼容入口 | skill 权威入口路径变化后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
 | `/home/ling/workspace/project-ops/backlog-cli/backlog/` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
 | `/home/ling/workspace/project-ops/backlog-cli/plans/` | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 新增或更新执行计划时 |
