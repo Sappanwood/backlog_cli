@@ -23,6 +23,10 @@ class BacklogItemParseError(ValueError):
         super().__init__(f"Failed to parse item file {filepath}: {original_error}")
 
 
+def _dump_post(post: frontmatter.Post) -> str:
+    return frontmatter.dumps(post).rstrip("\n") + "\n"
+
+
 def _find_backlog_dir(start: Path | None = None) -> Path | None:
     """Walk upward from start to find a docs/backlog/ directory."""
     if start is None:
@@ -280,7 +284,7 @@ def add_item(item: BacklogItem, project_path: Path | None = None) -> Path:
         post = frontmatter.Post(item.body, **metadata)
         
         temp_filepath = filepath.with_suffix(".tmp")
-        temp_filepath.write_text(frontmatter.dumps(post))
+        temp_filepath.write_text(_dump_post(post))
         temp_filepath.replace(filepath)
         _rebuild_index_silent(project_path)
         return filepath
@@ -338,7 +342,7 @@ def update_item(
         post = frontmatter.Post(body, **current_data)
         
         temp_filepath = filepath.with_suffix(".tmp")
-        temp_filepath.write_text(frontmatter.dumps(post))
+        temp_filepath.write_text(_dump_post(post))
         temp_filepath.replace(filepath)
         _rebuild_index_silent(project_path)
         return show_item(item_id, project_path)

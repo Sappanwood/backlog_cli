@@ -558,6 +558,30 @@ class TestConcurrencyAndAtomicReplace:
         assert updated is not None
         assert updated.title == "Updated Atomic"
 
+    def test_add_writes_final_newline(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-001", project="test", title="Final newline",
+            category=Category.FEATURE, priority=Priority.P1,
+            body="body without newline",
+        )
+
+        add_item(item, tmp_path)
+
+        assert (items_dir / "TST-001.md").read_bytes().endswith(b"\n")
+
+    def test_update_body_writes_final_newline(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        item = BacklogItem(
+            id="TST-001", project="test", title="Final newline",
+            category=Category.FEATURE, priority=Priority.P1,
+        )
+        add_item(item, tmp_path)
+
+        update_item("TST-001", {"body": "body from file without newline"}, tmp_path)
+
+        assert (items_dir / "TST-001.md").read_bytes().endswith(b"\n")
+
 
 class TestDependenciesCheck:
     def test_self_dependency_raises(self, tmp_path):
