@@ -1,5 +1,6 @@
 """Unit tests for backlog items CRUD operations."""
 
+import subprocess
 from datetime import date, datetime
 from pathlib import Path
 
@@ -422,6 +423,26 @@ class TestGenerateIndex:
         assert "P3" in content
         assert "feature" in content
         assert "TST-001" in content
+
+    def test_all_done_index_passes_git_diff_check(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001", status="done")
+
+        content = generate_index(tmp_path)
+        assert content.endswith("## Recommended Next (by score)\n")
+
+        index_path = tmp_path / "INDEX.md"
+        index_path.write_text(content)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "add", index_path.name], cwd=tmp_path, check=True)
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--check"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 class TestJsonify:

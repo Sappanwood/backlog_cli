@@ -392,8 +392,9 @@ def generate_index(
     lines.append("")
 
     lines.append("## Recommended Next (by score)")
-    lines.append("")
     active = [i for i in items if i.effective_status in (Status.TODO, Status.IN_PROGRESS) and i.score > 0]
+    if active:
+        lines.append("")
     for item in active[:20]:
         lines.append(
             f"- [{item.id}](items/{item.id}.md) [{item.priority.value}] "
