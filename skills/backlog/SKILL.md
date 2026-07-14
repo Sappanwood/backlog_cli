@@ -18,8 +18,8 @@ metadata:
 
 `backlog` 是轻量级任务管理 CLI。每个条目对应
 `<backlog-root>/items/<ID>.md`，使用 YAML frontmatter 承载结构化数据，Markdown 正文承载
-「为什么 / 做什么 / 如何验证」描述。CLI 负责 ID 生成、frontmatter 更新、状态流转、统计和
-`INDEX.md` 重建。
+任务意图与验收边界。CLI 负责 ID 生成、frontmatter 更新、状态流转、统计和 `INDEX.md`
+重建。
 
 ## 触发时机
 
@@ -87,8 +87,8 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target 
 | 取消/关闭 | `update <ID> -s cancelled` |
 | 设置依赖关系 | `update <ID> --depends-on INK-001,INK-002` |
 | 设置相关文档 | `update <ID> --related-docs docs/ARCHITECTURE.md,project-ops:plans/plan.md` |
-| 新增条目 | `add -T "标题" -c <category> --priority P1 -b "一句话描述" [-e S] [-i high]` |
-| 新增条目(多行正文) | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md` |
+| 新增快速记录 | `add -T "标题" -c <category> --priority P1 -b "一句话描述" [-e S] [-i high]` |
+| 新增可执行条目 | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md` |
 | 通过管道新增 | `cat body.md \| backlog add ... --stdin` |
 | 更新条目字段 | `update <ID> --title "新标题" --priority P2 [-b "更新后的描述"]` |
 | 替换正文(文件) | `update <ID> --body-file /tmp/body.md` |
@@ -98,6 +98,64 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target 
 | 查看统计 (JSON) | `stats --json` |
 | 生成总览索引 | `index` |
 | 编辑正文(交互) | `edit <ID>` |
+
+## Backlog Item Body Contract
+
+Backlog item 是任务意图与验收边界的权威来源，不预先描述具体 Agent、运行阶段或调度方式。
+Agent 创建或补全一个准备交付执行的 item 时，正文默认包含 `Intent` 和
+`Acceptance Criteria`：
+
+```markdown
+## Intent
+
+说明当前问题、为什么值得处理，以及完成后应产生的可观察变化。描述 what/why，不预先规定
+how。
+
+## Acceptance Criteria
+
+- 列出 Reviewer 可以明确判断通过或失败的结果。
+- 根据任务风险覆盖必要的成功行为、失败行为和关键边界。
+```
+
+只有存在实际信息时才添加以下可选章节，不为模板完整性创建空章节：
+
+```markdown
+## Boundaries
+
+- 记录必须保持的兼容行为、明确排除的范围或不可违反的约束。
+
+## Decision Boundaries
+
+- 说明 Agent 可以自主决定的事项。
+- 说明哪些情况必须停止并向用户报告或请求决策。
+```
+
+正文生成规则：
+
+- `Intent` 描述稳定的目的和结果，不把暂定实现思路、文件列表、工具选择或执行步骤写成要求。
+- `Acceptance Criteria` 使用可观察、可验证的结果；除非实现方式本身是已接受的架构约束，
+  不规定类名、函数名、算法或内部模块划分。
+- 已确定的架构决策和计划通过 `related_docs` 引用，优先使用逻辑路径和 section
+  anchor；正文只提取直接影响本 item 的边界，不复制整份文档。
+- 条目依赖使用 `depends_on` 表达。仅当依赖如何影响当前任务并不明显时，才在正文补充说明。
+- Repo `AGENTS.md` 中的默认测试、文档同步和质量门禁自动适用；只有需要增加、缩小或偏离
+  默认要求时才写入正文。
+- 不编造缺失的产品或架构决策。若缺失信息会实质改变目标、验收边界或公开契约，先向用户
+  询问；否则保留给执行 Agent 判断。
+
+一句话 `-b` 适合快速捕获尚未充分定义的 seed、提醒或后续调查线索。它本身不代表 item 已
+达到可执行标准。准备交给 Agent 或 orchestrator 执行时，使用 `--body-file` 或 `--stdin`
+写入上述最小正文。
+
+判断 item 是否足以执行时，不按正文长度或可选章节数量判定，而检查：
+
+1. 具备项目所需能力的 Agent 能否在不追问已有事实的情况下开始工作；
+2. Reviewer 能否根据 item 与 `related_docs` 判断通过或失败；
+3. 真正不可违反的边界是否明确；
+4. 未被锁定的实现选择是否仍留给执行 Agent。
+
+CLI 当前只负责保存正文，不机械验证这些语义要求。消费 item 的 workflow 或 orchestrator 应在
+派发前执行完整性检查，并拒绝目标或验收边界不足的条目。
 
 ## 自动行为边界
 
@@ -146,7 +204,9 @@ backlog --target <ops-path> add -T "描述" -c <bug|refactor|perf|feature|ux|doc
 backlog --target <ops-path> index
 ```
 
-若正文较长，使用 `--body-file /tmp/body.md` 或 `--stdin`，避免把多行 Markdown 塞进 `-b`。
+该形式用于快速捕获。如果问题已经足够明确并准备交付执行，按
+`Backlog Item Body Contract` 编写多行正文，并使用 `--body-file /tmp/body.md` 或 `--stdin`，
+避免把多行 Markdown 塞进 `-b`。
 
 ### 查看整体进度
 
@@ -203,7 +263,8 @@ score = priority_weight * impact_weight * effort_weight
 ## 操作约定
 
 - 新增条目时必须提供 `-T`（标题）、`-c`（分类）、`--priority`（优先级）。项目名自动从目标目录名推导。
-- 强烈建议同时提供 `-b "描述"`：一句话说明背景、目的或验收标准。
+- 快速捕获 seed、提醒或调查线索时可使用 `-b "描述"`；准备交付执行的 item 按
+  `Backlog Item Body Contract` 使用多行正文。
 - ID 自动生成：格式为 `<目录名前3字母大写>-<三位序号>`，如 `zhijian/` 目录生成 `ZHI-001`。
 - `update` 只修改明确传入的字段，其余保持不变。
 - `related_docs` 保存与条目相关的 Repo 文档或 Project Ops artifact 逻辑引用。`--related-docs` 传入逗号分隔列表并替换整个列表。CLI 只做 trim/去空，不检查路径是否存在。
@@ -211,7 +272,8 @@ score = priority_weight * impact_weight * effort_weight
 - `fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`。
 - 具有未完成前置依赖的条目，在读取/渲染视图时有效状态 `effective_status` 为 `blocked`，但底层 Markdown 数据仍保持其声明状态。更新操作不会将计算出的临时 `blocked` 状态持久化。
 - 所有带 `--json`（或 `--format json`）选项的命令成功时输出 `{"ok": true, "data": ...}`；失败时输出 `{"ok": false, "error": {"code": "...", "message": "...", "details": {}}}`。常见错误码包括 `PARSING_ERROR`、`ITEM_CONFLICT`、`ITEM_NOT_FOUND`、`INVALID_INPUT`。
-- 单行简短正文使用 `-b "一句话描述"`；多行正文使用 `--body-file /tmp/body.md` 或 `--stdin`。
+- 单行快速记录使用 `-b "一句话描述"`；可执行正文使用 `--body-file /tmp/body.md` 或
+  `--stdin`。
 - 禁止通过 `-b "line1\nline2"` 传递多行，`\n` 不会被 shell 展开。
 - `--stdin` 和 `--body-file` 为二进制安全通道。
 - 非 TTY 环境中 `edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`。
@@ -243,10 +305,10 @@ backlog --target <ops-path> next -n 5
 # 查看条目
 backlog --target <ops-path> show <ID>
 
-# 新增条目
+# 新增快速记录
 backlog --target <ops-path> add -T "标题" -c feature --priority P1 -e M -i high -b "一句话描述"
 
-# 新增条目（多行正文）
+# 新增可执行条目（正文包含 Intent 与 Acceptance Criteria）
 backlog --target <ops-path> add -T "标题" -c feature --priority P1 --body-file /tmp/body.md
 
 # 更新字段
