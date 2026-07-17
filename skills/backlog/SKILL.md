@@ -36,15 +36,10 @@ CRUD 场景时才主动操作。
 
 ## Project Ops 路径解析
 
-所有已注册项目的 backlog 操作前，运行：
-
-```bash
-project-ops resolve <目标路径> --json
-```
-
-确认输出 `ok` 为 `true`，将 `data.ops` 记为 `<ops-path>`，将 `data.repo` 记为目标 Repo。
-命令返回 `PROJECT_NOT_FOUND` 或其他错误时停止，不得回退到 Repo 内创建 `docs/backlog/`。
-不得自行读取注册表、解释 `workspace_root`、拼接路径或按目录名猜测项目。
+所有已注册项目的 backlog 操作前，按 `/home/ling/workspace/AGENTS.md` 的项目注册表规则读取
+`/home/ling/workspace/project-ops/projects.json`。将唯一匹配记录的 `ops` 记为 `<ops-path>`，
+将 `repo` 记为目标 Repo，并读取目标 Repo 的 `AGENTS.md`。无匹配或匹配不唯一时停止，不得
+回退到 Repo 内创建 `docs/backlog/`。
 
 只有处理未注册的独立 Repo 时，才允许依赖 `backlog` 从当前工作目录向上查找
 `docs/backlog/`。
@@ -59,18 +54,16 @@ backlog --target <ops-path> <子命令>
 
 `--target` 必须指定注册表解析出的 `<ops-path>`。backlog-cli 会在其下管理 `backlog/`。
 
-若 PATH 中的 `backlog` 入口不可用或模块环境损坏，先用 `project-ops list --json` 获取
-`id == "backlog-cli"` 的 `data.projects[]` 条目，将其 `repo` 记为 `<backlog-cli-repo>`，
-再使用：
+若 PATH 中的 `backlog` 入口不可用或模块环境损坏，从同一 registry 获取
+`id == "backlog-cli"` 的唯一记录，将其 `repo` 记为 `<backlog-cli-repo>`，再使用：
 
 ```bash
 UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target <ops-path> <子命令>
 ```
 
-`<backlog-cli-repo>` 必须来自稳定 JSON 契约，不得使用历史固定路径。若 `project-ops` CLI
-不可用则停止并报告，不能回退实现注册表解析；若 backlog fallback 也不可用，才回退为直接编辑
-`<ops-path>/backlog/items/*.md`。回退后必须用等价方式同步 `<ops-path>/backlog/INDEX.md`，
-并在回复中说明未能使用 CLI。
+`<backlog-cli-repo>` 必须来自 registry，不得使用历史固定路径。若 backlog fallback 也不可用，
+才回退为直接编辑 `<ops-path>/backlog/items/*.md`。回退后必须用等价方式同步
+`<ops-path>/backlog/INDEX.md`，并在回复中说明未能使用 CLI。
 
 ## 命令速查
 
@@ -283,11 +276,10 @@ score = priority_weight * impact_weight * effort_weight
 
 ## 跨项目使用
 
-通过 `--target` 参数切换目标。已注册项目先使用 `project-ops resolve <Repo 路径> --json`
-解析，并将输出中的 `data.ops` 作为 `<ops-path>`。不得自行读取注册表、拼接 Project Ops 路径或使用固定路径 fallback。
+通过 `--target` 参数切换目标。已注册项目先按 Workspace `AGENTS.md` 的项目注册表规则取得
+记录，并将其中的 `ops` 作为 `<ops-path>`。不得拼接 Project Ops 路径或使用固定路径 fallback。
 
 ```bash
-project-ops resolve <Repo 路径> --json
 backlog --target <ops-path> stats --json
 ```
 
