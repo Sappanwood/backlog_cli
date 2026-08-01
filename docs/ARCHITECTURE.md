@@ -138,13 +138,23 @@ class BacklogItem(BaseModel):
 ### items.py → cli.py
 
 ```python
-list_items(project_path: Path | None) -> list[BacklogItem]
-show_item(item_id: str, project_path: Path | None) -> BacklogItem | None
+list_items(store: StoreContext) -> list[BacklogItem]
+show_item(item_id: str, store: StoreContext) -> BacklogItem | None
+
+# Temporary legacy adapter for the existing CLI and mutation APIs.
+list_legacy_items(project_path: Path | None) -> list[BacklogItem]
+show_legacy_item(item_id: str, project_path: Path | None) -> BacklogItem | None
+
 add_item(item: BacklogItem, project_path: Path | None) -> Path
 update_item(item_id: str, updates: dict, project_path: Path | None, expected_revision: str | None) -> BacklogItem | None
 next_id(project_name: str, project_path: Path | None) -> str
 generate_index(project_path: Path | None, project: str | None) -> str
 ```
+
+`list_items` 和 `show_item` 是 portable core read API：调用者必须先通过
+`store.load_store()` 获得准确的 `StoreContext`，它们不会检查 CWD、项目路径或 legacy layout，也不会创建任何文件。
+在 BAC-031/BAC-032 完成前，CLI 与 mutation API 继续通过明确命名的 legacy adapter 保持既有
+`<target>/backlog/`、`<target>/docs/backlog/` 和 CWD discovery 行为；该 adapter 不属于 portable core。
 
 ## 关键设计决策
 

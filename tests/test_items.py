@@ -17,10 +17,14 @@ from backlog.items import (
     get_backlog_dir,
     get_item_filepath,
     get_items_dir,
-    list_items,
     next_id,
-    show_item,
     update_item,
+)
+from backlog.items import (
+    list_legacy_items as list_items,
+)
+from backlog.items import (
+    show_legacy_item as show_item,
 )
 from backlog.models import (
     BacklogItem,

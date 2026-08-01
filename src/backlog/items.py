@@ -3,6 +3,7 @@
 import contextlib
 import fcntl
 import re
+import stat
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 import frontmatter
 
 from .models import BacklogItem, Status
+from .store import StoreContext
 
 ITEMS_DIRNAME = "items"
 INDEX_FILENAME = "INDEX.md"
@@ -87,7 +89,7 @@ def check_dependencies(
     if item_id in depends_on:
         raise ValueError(f"Self dependency detected: '{item_id}' cannot depend on itself.")
 
-    all_items = list_items(project_path)
+    all_items = list_legacy_items(project_path)
     existing_ids = {item.id for item in all_items}
 
     for dep in depends_on:
@@ -201,21 +203,73 @@ def _apply_dependency_blocking(items: list[BacklogItem]) -> None:
             item.is_blocked = True
 
 
-def list_items(project_path: Path | None = None) -> list[BacklogItem]:
-    """List all backlog items. Auto-marks items as blocked if dependencies are not done."""
-    items_dir = get_items_dir(project_path, create=False)
+def _store_item_path(item_id: str, store: StoreContext) -> Path:
+    """Return an existing regular item file contained by an exact store context."""
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", item_id):
+        raise ValueError("Invalid item ID format")
+    filepath = store.items_path / f"{item_id}.md"
+    try:
+        mode = filepath.lstat().st_mode
+    except FileNotFoundError:
+        return filepath
+    except OSError as error:
+        raise BacklogItemParseError(filepath, error) from error
+    try:
+        resolved = filepath.resolve(strict=True)
+    except FileNotFoundError as error:
+        raise BacklogItemParseError(filepath, ValueError("item must be a regular file")) from error
+    except OSError as error:
+        raise BacklogItemParseError(filepath, error) from error
+    if not resolved.is_relative_to(store.items_path):
+        raise BacklogItemParseError(filepath, ValueError("item escapes store items directory"))
+    if not stat.S_ISREG(mode):
+        raise BacklogItemParseError(filepath, ValueError("item must be a regular file"))
+    return filepath
+
+
+def list_items(store: StoreContext) -> list[BacklogItem]:
+    """List items from one exact StoreContext without filesystem discovery or writes."""
     items: list[BacklogItem] = []
-    if not items_dir.exists():
-        return items
-    for f in sorted(items_dir.glob("*.md")):
-        item = _load_item(f)
-        items.append(item)
+    for filepath in sorted(store.items_path.glob("*.md")):
+        safe_path = _store_item_path(filepath.stem, store)
+        if safe_path.exists():
+            items.append(_load_item(safe_path))
     _apply_dependency_blocking(items)
     return items
 
 
-def show_item(item_id: str, project_path: Path | None = None) -> BacklogItem | None:
-    """Show a single item by ID. Auto-marks as blocked if dependencies are not done."""
+def show_item(item_id: str, store: StoreContext) -> BacklogItem | None:
+    """Show an item from one exact StoreContext without filesystem discovery or writes."""
+    try:
+        filepath = _store_item_path(item_id, store)
+    except BacklogItemParseError:
+        raise
+    except ValueError:
+        return None
+    if not filepath.exists():
+        return None
+    item = _load_item(filepath)
+    if item.status not in (Status.DONE, Status.CANCELLED) and item.depends_on:
+        done_ids = {candidate.id for candidate in list_items(store) if candidate.status == Status.DONE}
+        if not all(dep in done_ids for dep in item.depends_on):
+            item.is_blocked = True
+    return item
+
+
+def list_legacy_items(project_path: Path | None = None) -> list[BacklogItem]:
+    """List items through the legacy project-path discovery adapter."""
+    items_dir = get_items_dir(project_path, create=False)
+    items: list[BacklogItem] = []
+    if not items_dir.exists():
+        return items
+    for filepath in sorted(items_dir.glob("*.md")):
+        items.append(_load_item(filepath))
+    _apply_dependency_blocking(items)
+    return items
+
+
+def show_legacy_item(item_id: str, project_path: Path | None = None) -> BacklogItem | None:
+    """Show an item through the legacy project-path discovery adapter."""
     try:
         filepath = get_item_filepath(item_id, project_path, create=False)
     except ValueError:
@@ -225,9 +279,9 @@ def show_item(item_id: str, project_path: Path | None = None) -> BacklogItem | N
     item = _load_item(filepath)
     if item.status not in (Status.DONE, Status.CANCELLED) and item.depends_on:
         done_ids = {
-            i.id
-            for i in list_items(project_path)
-            if i.status == Status.DONE
+            candidate.id
+            for candidate in list_legacy_items(project_path)
+            if candidate.status == Status.DONE
         }
         if not all(dep in done_ids for dep in item.depends_on):
             item.is_blocked = True
@@ -239,7 +293,7 @@ def next_id(project_name: str, project_path: Path | None = None) -> str:
     if not re.match(r"^[a-zA-Z0-9_-]+$", project_name):
         raise ValueError("Invalid project name format")
     prefix = get_project_prefix(project_name)
-    items = list_items(project_path)
+    items = list_legacy_items(project_path)
     
     # Extract prefixes of existing items belonging to this project
     project_items = [item for item in items if item.project == project_name]
@@ -315,7 +369,7 @@ def update_item(
         if not filepath.exists():
             return None
 
-        current = show_item(item_id, project_path)
+        current = show_legacy_item(item_id, project_path)
         if current is None:
             return None
 
@@ -347,7 +401,7 @@ def update_item(
         temp_filepath.write_text(_dump_post(post))
         temp_filepath.replace(filepath)
         _rebuild_index_silent(project_path)
-        return show_item(item_id, project_path)
+        return show_legacy_item(item_id, project_path)
 
 
 def generate_index(
@@ -355,7 +409,7 @@ def generate_index(
     project: str | None = None,
 ) -> str:
     """Generate an INDEX.md overview for the backlog."""
-    items = list_items(project_path)
+    items = list_legacy_items(project_path)
     if project:
         items = [i for i in items if i.project == project]
     items.sort(key=lambda x: x.score, reverse=True)

@@ -1,11 +1,14 @@
 """Tests for the portable Backlog Store contract."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from backlog.items import BacklogItemParseError, list_items, show_item
+from backlog.models import Status
 from backlog.store import StoreLoadError, StoreManifest, load_store
 
 
@@ -34,6 +37,31 @@ def _store_snapshot(root: Path) -> list[tuple[str, int, bytes | None]]:
         content = entry.read_bytes() if entry.is_file() and not entry.is_symlink() else None
         entries.append((entry.name, mode, content))
     return entries
+
+
+def _write_item(root: Path, item_id: str, **overrides: object) -> None:
+    defaults: dict[str, object] = {
+        "id": item_id,
+        "project": "portable-project",
+        "title": f"Item {item_id}",
+        "category": "feature",
+        "priority": "P2",
+        "effort": "M",
+        "impact": "medium",
+        "status": "todo",
+        "source": "",
+        "tags": [],
+        "depends_on": [],
+        "related_docs": [],
+        "created": "2026-08-01",
+        "updated": "2026-08-01",
+    }
+    defaults.update(overrides)
+    lines = ["---"]
+    for key, value in defaults.items():
+        lines.append(f"{key}: {json.dumps(value)}")
+    lines.extend(["---", ""])
+    (root / "items" / f"{item_id}.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 class TestStoreManifest:
@@ -180,3 +208,87 @@ class TestLoadStore:
 
         with pytest.raises(StoreLoadError, match="lock.*regular"):
             load_store(root)
+
+
+class TestStoreContextReads:
+    def test_empty_store_read_does_not_create_entries(self, tmp_path):
+        root = _make_store(tmp_path)
+        context = load_store(root)
+        before = _store_snapshot(root)
+
+        assert list_items(context) == []
+        assert show_item("POR-001", context) is None
+
+        assert _store_snapshot(root) == before
+
+    def test_list_and_show_preserve_revision_and_effective_status(self, tmp_path):
+        root = _make_store(tmp_path)
+        _write_item(root, "POR-001", status="done", fixed_at="2026-08-01")
+        _write_item(root, "POR-002", depends_on=["POR-001"])
+        _write_item(root, "POR-003", depends_on=["POR-004"])
+        context = load_store(root)
+
+        items = list_items(context)
+        blocked = show_item("POR-003", context)
+
+        assert [item.id for item in items] == ["POR-001", "POR-002", "POR-003"]
+        assert items[1].status == Status.TODO
+        assert items[1].effective_status == Status.TODO
+        assert blocked is not None
+        assert blocked.revision
+        assert blocked.status == Status.TODO
+        assert blocked.effective_status == Status.BLOCKED
+
+    def test_malformed_item_fails_strictly_without_writing(self, tmp_path):
+        root = _make_store(tmp_path)
+        malformed = root / "items" / "POR-001.md"
+        malformed.write_text("not frontmatter", encoding="utf-8")
+        context = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(BacklogItemParseError, match="POR-001.md"):
+            list_items(context)
+
+        assert _store_snapshot(root) == before
+
+    def test_identical_relocated_store_has_deterministic_reads(self, tmp_path):
+        root = _make_store(tmp_path)
+        _write_item(root, "POR-002")
+        _write_item(root, "POR-001")
+        relocated = tmp_path / "relocated-store"
+        shutil.copytree(root, relocated)
+
+        original_items = list_items(load_store(root))
+        relocated_items = list_items(load_store(relocated))
+
+        assert [item.model_dump(mode="json") for item in relocated_items] == [
+            item.model_dump(mode="json") for item in original_items
+        ]
+
+    def test_item_symlink_escape_fails_without_writing(self, tmp_path):
+        root = _make_store(tmp_path)
+        outside = tmp_path / "outside.md"
+        outside.write_text("outside", encoding="utf-8")
+        (root / "items" / "POR-001.md").symlink_to(outside)
+        context = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(BacklogItemParseError, match="escapes store items directory"):
+            list_items(context)
+        with pytest.raises(BacklogItemParseError, match="escapes store items directory"):
+            show_item("POR-001", context)
+
+        assert _store_snapshot(root) == before
+
+    def test_dangling_item_symlink_fails_without_writing(self, tmp_path):
+        root = _make_store(tmp_path)
+        (root / "items" / "POR-001.md").symlink_to(tmp_path / "missing.md")
+        context = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(BacklogItemParseError, match="regular file"):
+            list_items(context)
+        with pytest.raises(BacklogItemParseError, match="regular file"):
+            show_item("POR-001", context)
+
+        assert _store_snapshot(root) == before
