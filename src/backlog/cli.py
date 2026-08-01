@@ -13,11 +13,14 @@ from rich.table import Table
 
 from .items import (
     BacklogItemParseError,
+    PatchResult,
+    RevisionConflictError,
     _legacy_store_context,
     add_item,
     generate_index,
     get_warnings,
     list_items,
+    patch_item,
     provision_legacy_store,
     show_item,
     update_item,
@@ -177,10 +180,15 @@ def _print_csv(items: list[BacklogItem]) -> None:
         ])
 
 
-def _output_items(items: list[BacklogItem], format: str, show_score: bool = False) -> None:
+def _output_items(
+    items: list[BacklogItem],
+    format: str,
+    show_score: bool = False,
+    all_items: list[BacklogItem] | None = None,
+) -> None:
     """Unified output: JSON, CSV, or Rich table."""
     if format == "json":
-        _print_json_success([i.model_dump(mode="json") for i in items])
+        _print_json_success(_agent_items(items, all_items=all_items))
     elif format == "csv":
         _print_csv(items)
     else:
@@ -203,6 +211,54 @@ def _parse_csv_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _blocked_by(item: BacklogItem, item_by_id: dict[str, BacklogItem]) -> list[str]:
+    """Return unresolved dependencies for an item without persisting derived state."""
+    return [
+        dependency
+        for dependency in item.depends_on
+        if (candidate := item_by_id.get(dependency)) is None or candidate.status != Status.DONE
+    ]
+
+
+def _agent_item(item: BacklogItem, item_by_id: dict[str, BacklogItem]) -> dict:
+    """Render one stable Agent JSON item record, including derived dependency state."""
+    data = item.model_dump(mode="json")
+    data["blocked_by"] = _blocked_by(item, item_by_id)
+    return data
+
+
+def _agent_items(items: list[BacklogItem], *, all_items: list[BacklogItem] | None = None) -> list[dict]:
+    item_by_id = {item.id: item for item in all_items or items}
+    return [_agent_item(item, item_by_id) for item in items]
+
+
+def _agent_mutation(
+    outcome: PatchResult,
+    store: StoreContext,
+    *,
+    filepath: Path | None = None,
+) -> dict:
+    """Render a mutation receipt while retaining flattened item fields for compatibility."""
+    item_by_id = {item.id: item for item in list_items(store)}
+    before = _agent_item(outcome.before, item_by_id)
+    result = _agent_item(outcome.result, item_by_id)
+    receipt = {
+        "store": {
+            "project_id": store.manifest.project_id,
+            "id_prefix": store.manifest.id_prefix,
+        },
+        "before": before,
+        "result": result,
+        "changed_fields": outcome.changed_fields,
+        "revision": outcome.result.revision,
+        "no_op": outcome.no_op,
+        **result,
+    }
+    if filepath is not None:
+        receipt["filepath"] = str(filepath)
+    return receipt
+
+
 @app.command(name="list")
 def list_cmd(
     category: Category | None = typer.Option(None, "--category", "-c", help="Filter by category"),
@@ -212,7 +268,7 @@ def list_cmd(
     sort: str = typer.Option("score", "--sort", help="Sort by: score, priority, id"),
     limit: int = typer.Option(0, "--limit", "-n", help="Limit results"),
     format: str = typer.Option("table", "--format", help="Output format: json, table, csv"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON (deprecated)"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """List backlog items with optional filters."""
     if format not in ("json", "table", "csv"):
@@ -236,7 +292,7 @@ def list_cmd(
             allowed_priorities.append(Priority[p_strip])
 
     try:
-        items = list_items(_resolve_store_context())
+        all_items = list_items(_resolve_store_context())
     except BacklogItemParseError as e:
         if format == "json":
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -244,6 +300,7 @@ def list_cmd(
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
 
+    items = list(all_items)
     if category:
         items = [i for i in items if i.category == category]
     if allowed_priorities is not None:
@@ -263,7 +320,7 @@ def list_cmd(
     if limit > 0:
         items = items[:limit]
 
-    _output_items(items, format=format, show_score=(sort == "score"))
+    _output_items(items, format=format, show_score=(sort == "score"), all_items=all_items)
 
 
 @app.command()
@@ -296,7 +353,7 @@ def show(
         raise typer.Exit(1)
 
     if json_output:
-        _print_json_success(item.model_dump(mode="json"))
+        _print_json_success(_agent_item(item, {candidate.id: candidate for candidate in list_items(store)}))
         return
 
     console.print(
@@ -408,10 +465,20 @@ def add(
         warnings_list.append(f"Defaults applied: {', '.join(applied_defaults)}. Please evaluate them if necessary.")
 
     if json_output:
-        _print_json_success({
-            "id": item.id,
-            "filepath": str(filepath),
-        }, warnings=warnings_list if warnings_list else None)
+        created = PatchResult(
+            before=item.model_copy(deep=True),
+            result=item,
+            changed_fields=sorted(
+                field
+                for field in item.model_dump(mode="json", exclude={"score", "effective_status", "extra"})
+                if field not in {"is_blocked"}
+            ),
+            no_op=False,
+        )
+        _print_json_success(
+            _agent_mutation(created, store, filepath=filepath) | {"before": None},
+            warnings=warnings_list if warnings_list else None,
+        )
         return
 
     if warnings_list:
@@ -491,10 +558,16 @@ def update(
             current = show_item(item_id, store)
             if current is not None:
                 store = _resolve_store_context(project_name=current.project)
-        result = update_item(item_id, updates, store, expected_revision=expected_revision)
+        result = patch_item(item_id, updates, store, expected_revision=expected_revision)
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
+        else:
+            console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+    except RevisionConflictError as e:
+        if json_output:
+            _print_json_error("REVISION_MISMATCH", str(e))
         else:
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
@@ -514,13 +587,16 @@ def update(
 
     warnings_list = get_warnings()
     if json_output:
-        _print_json_success(result.model_dump(mode="json"), warnings=warnings_list if warnings_list else None)
+        _print_json_success(
+            _agent_mutation(result, store),
+            warnings=warnings_list if warnings_list else None,
+        )
         return
 
     if warnings_list:
         for w in warnings_list:
             stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
-    console.print(f"[green]Updated[/green] {item_id} — {result.title}")
+    console.print(f"[green]Updated[/green] {item_id} — {result.result.title}")
 
 
 @app.command()
@@ -608,13 +684,16 @@ def stats(
 @app.command(name="next")
 def next_cmd(
     limit: int = typer.Option(5, "--limit", "-n", help="Number of items to show"),
-    status: Status = typer.Option(
-        Status.TODO, "--status", help="Filter by status (todo/in_progress)"
+    status: Status | None = typer.Option(
+        None, "--status", help="Filter by effective status"
     ),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Show recommended next items sorted by priority score."""
-    if status not in (Status.TODO, Status.IN_PROGRESS):
+    """Show the human recommendation view or the Agent work queue."""
+    queue_statuses = (Status.TODO, Status.IN_PROGRESS, Status.BLOCKED)
+    if json_output and status is not None and status not in queue_statuses:
+        raise typer.BadParameter("Agent work queues only support todo, in_progress, or blocked status filters.")
+    if not json_output and status is not None and status not in (Status.TODO, Status.IN_PROGRESS):
         raise typer.BadParameter("Only 'todo' or 'in_progress' status can be recommended.")
     if limit < 0:
         raise typer.BadParameter("Limit must be a non-negative integer.")
@@ -628,32 +707,60 @@ def next_cmd(
             console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
 
-    active = [i for i in items if i.effective_status == status and i.score > 0]
+    warnings_list = get_warnings()
+
+    if json_output:
+        queue_states = {
+            Status.IN_PROGRESS: "in_progress",
+            Status.TODO: "ready",
+            Status.BLOCKED: "blocked",
+        }
+        queue = [
+            item
+            for item in items
+            if item.effective_status in queue_states and (status is None or item.effective_status == status)
+        ]
+        queue.sort(
+            key=lambda item: (
+                {"in_progress": 0, "ready": 1, "blocked": 2}[queue_states[item.effective_status]],
+                item.priority.value,
+                item.id,
+            )
+        )
+        queue = queue[:limit]
+        item_by_id = {item.id: item for item in items}
+        rendered_queue = []
+        for item in queue:
+            record = _agent_item(item, item_by_id)
+            record["queue_state"] = queue_states[item.effective_status]
+            score = record.pop("score")
+            record["score_hint"] = {
+                "value": score,
+                "formula": "priority_weight * impact_weight * effort_weight",
+            }
+            rendered_queue.append(record)
+        _print_json_success(
+            rendered_queue,
+            warnings=warnings_list if warnings_list else None,
+        )
+        return
+
+    human_status = status or Status.TODO
+    active = [i for i in items if i.effective_status == human_status and i.score > 0]
     active.sort(key=lambda x: x.score, reverse=True)
     active = active[:limit]
 
-    warnings_list = get_warnings()
-
     if not active:
-        if json_output:
-            _print_json_success([], warnings=warnings_list if warnings_list else None)
-        else:
-            if warnings_list:
-                for w in warnings_list:
-                    stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
-            console.print(f"[dim]No active {status.value} items to recommend.[/dim]")
-        return
-
-    if json_output:
-        _print_json_success(
-            [i.model_dump(mode="json") for i in active],
-            warnings=warnings_list if warnings_list else None
-        )
-    else:
         if warnings_list:
             for w in warnings_list:
                 stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
-        _print_table(active, show_score=True)
+        console.print(f"[dim]No active {human_status.value} items to recommend.[/dim]")
+        return
+
+    if warnings_list:
+        for w in warnings_list:
+            stderr_console.print(f"[yellow]Warning: {w}[/yellow]", style="yellow")
+    _print_table(active, show_score=True)
 
 
 @app.command()

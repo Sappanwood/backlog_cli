@@ -74,8 +74,8 @@ UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --store <
 | 查看所有待办 | `list --status todo` |
 | 按优先级过滤 | `list --priority P0,P1 --status todo` |
 | 按分类过滤 | `list -c bug --status todo` |
-| 查看推荐做啥 | `next -n 5` |
-| 查看推荐 (JSON) | `next -n 5 --json` |
+| 查看人类兼容推荐 | `next -n 5` |
+| 查看 Agent work queue (JSON) | `next -n 5 --json` |
 | 查看完整条目 | `show <ID>` |
 | 开始做一条 | `update <ID> -s in_progress` |
 | 标记完成 | `update <ID> --fixed` |
@@ -235,7 +235,7 @@ updated: "2026-04-27"
 
 ## 排序规则
 
-`next` 和 `list --sort score` 使用的推荐分数：
+非 JSON 的 `next` 和 `list --sort score` 使用的兼容推荐分数：
 
 ```text
 score = priority_weight * impact_weight * effort_weight
@@ -249,11 +249,15 @@ score = priority_weight * impact_weight * effort_weight
 | P3 | 1 | | | L | 1.0 |
 | | | | | XL | 0.5 |
 
-高影响 + 小工作量的条目排最前。done/cancelled 条目 score=0。
+高影响 + 小工作量的条目排最前。done/cancelled 条目 score=0。该 score 只用于兼容解释，不能作为
+Agent 的任务选择、完成度判断或工作流编排决策。
 
 - `list --sort score`：按 score 展示所有匹配条目，包含 `blocked`
-- `next`：只推荐 `todo` / `in_progress`，排除 `blocked`、`done`、`cancelled`
-- `list --json` 与 `next --json`：每个条目包含 `score` 字段，供 Agent 解释推荐依据
+- 非 JSON `next`：只推荐 `todo` / `in_progress`，排除 `blocked`、`done`、`cancelled`
+- `next --json`：返回完整 Agent work queue；每个活跃条目都有 `queue_state`（`in_progress`、`ready`、
+  `blocked`）、`blocked_by` 和 `score_hint`（不返回裸 `score`），并以状态、priority、ID 确定性排序；
+  未指定 `--status` 返回全部三态，显式 `--status todo|in_progress|blocked` 按 effective status 过滤
+- `list --json` 和 `show --json`：每个条目包含声明 `status`、派生 `effective_status` 和 `blocked_by`
 
 ## 操作约定
 
@@ -263,16 +267,23 @@ score = priority_weight * impact_weight * effort_weight
 - ID 自动生成：exact store 使用 manifest `id_prefix`，格式为 `<PREFIX>-<三位序号>`，如 `ZHI-001`。
 - `update` 只修改明确传入的字段，其余保持不变。
 - `related_docs` 保存与条目相关的 Repo 文档或 Project Ops artifact 逻辑引用。`--related-docs` 传入逗号分隔列表并替换整个列表。CLI 只做 trim/去空，不检查路径是否存在。
-- `--fixed` 是快捷方式，等于 `-s done` + 自动填写 `fixed_at`。
+- `--fixed` 是兼容快捷方式，等于 `-s done` + 自动填写 `fixed_at`；Agent 直接使用 `--status done`，同样自动填写。
 - `fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`。
 - 具有未完成前置依赖的条目，在读取/渲染视图时有效状态 `effective_status` 为 `blocked`，但底层 Markdown 数据仍保持其声明状态。更新操作不会将计算出的临时 `blocked` 状态持久化。
-- 所有带 `--json`（或 `--format json`）选项的命令成功时输出 `{"ok": true, "data": ...}`；失败时输出 `{"ok": false, "error": {"code": "...", "message": "...", "details": {}}}`。常见错误码包括 `PARSING_ERROR`、`ITEM_CONFLICT`、`ITEM_NOT_FOUND`、`INVALID_INPUT`。
+- Agent 官方操作仅为 `list`、`show`、`add`、`update`、`next`，均使用 `--json`。成功时输出
+  `{"ok": true, "data": ...}` 并退出 0；操作失败时输出
+  `{"ok": false, "error": {"code": "...", "message": "...", "details": {}}}` 并退出 1；CLI usage error
+  退出 2。常见错误码包括 `PARSING_ERROR`、`ITEM_CONFLICT`、`ITEM_NOT_FOUND`、`INVALID_INPUT`、
+  `REVISION_MISMATCH`。
+- `add` 与 `update` 的 `data` 是 mutation receipt，包含 `before`、`result`、`changed_fields`、
+  `revision`、`no_op` 及 store identity。读取当前 revision 后，`update --expected-revision <REV>` 可避免覆盖
+  并发修改；值未改变时返回 `no_op: true` 且不会写入 item 或 index。
 - 单行快速记录使用 `-b "一句话描述"`；可执行正文使用 `--body-file /tmp/body.md` 或
   `--stdin`。
 - 禁止通过 `-b "line1\nline2"` 传递多行，`\n` 不会被 shell 展开。
 - `--stdin` 和 `--body-file` 为二进制安全通道。
 - 非 TTY 环境中 `edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`。
-- `next --json` 返回与 `list --json` 一致的结构化输出，供 Agent 解析推荐列表。
+- `next --json` 返回 work queue，而不是任务编排或完成度判断；它不包含 done/cancelled 项，空队列返回空数组。
 - 每个条目均在 frontmatter 包含 `revision` 数据指纹。使用 `update` 修改条目时，可传入 `--expected-revision <REV>` 进行乐观锁校验。
 - 新增条目时无需前置在外部计算 ID，底层在安全锁内计算 `next_id()`，能避免多 Agent 并发写入时分配重复 ID。
 

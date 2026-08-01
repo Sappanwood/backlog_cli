@@ -323,7 +323,7 @@ class TestNextCommand:
         assert result.exit_code == 0
         assert "TST-001" in result.stdout
 
-    def test_next_json_includes_score(self, runner, tmp_path):
+    def test_next_json_includes_score_hint(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)
         items_dir = project_path / "docs" / "backlog" / "items"
         _write_item(items_dir, "TST-001", status="todo", priority="P1", impact="high", effort="XS")
@@ -332,7 +332,8 @@ class TestNextCommand:
         data = json.loads(result.stdout)
         assert data["ok"] is True
         assert data["data"][0]["id"] == "TST-001"
-        assert data["data"][0]["score"] == 1500.0
+        assert data["data"][0]["score_hint"]["value"] == 1500.0
+        assert "score" not in data["data"][0]
 
     def test_next_skips_blocked(self, runner, tmp_path):
         project_path = _make_backlog(tmp_path)

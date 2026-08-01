@@ -90,13 +90,23 @@ Each item has fields such as:
 score = priority_weight * impact_weight * effort_weight
 ```
 
-`next` recommends only `todo` and `in_progress` items. JSON output includes `score` so callers can explain ordering.
+The human `next` view retains score-based recommendations for compatibility. Agent JSON instead returns a work queue
+whose records identify `queue_state` as `in_progress`, `ready`, or `blocked`, include `blocked_by`, and expose score
+only as the explainable `score_hint` compatibility field. Without `--status`, Agent JSON returns all three states;
+an explicit `--status todo|in_progress|blocked` filters by effective status.
 
 ## AI Agent Contract
 
 AI agents should use the repo-owned skill at [skills/backlog/SKILL.md](skills/backlog/SKILL.md) as the command
 and behavior contract. That document is the source of truth for agent-safe invocation patterns, JSON parsing,
 status transitions, and cross-project usage.
+
+The five official Agent operations are `list`, `show`, `add`, `update`, and `next`, each invoked with `--json`.
+Every successful call returns `{"ok": true, "data": ...}` and every failure returns
+`{"ok": false, "error": {"code", "message", "details"}}`; successful calls exit 0 and operation failures exit 1
+(CLI usage errors exit 2). `add` and `update` return a mutation receipt with `before`, `result`,
+`changed_fields`, `revision`, and `no_op`. `update --expected-revision` rejects stale writes with
+`REVISION_MISMATCH`; setting `--status done` fills `fixed_at` automatically.
 
 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) remains as a compatibility redirect for older links.
 

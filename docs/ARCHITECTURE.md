@@ -108,7 +108,9 @@ Markdown 正文（body）
 `<target>/docs/backlog/`；未传 target 时才向上发现 `docs/backlog/`。若 legacy root 已有 manifest，adapter
 严格载入它；否则仅在 adapter 层以既有布局和持久 item identity 构造 temporary context。两条入口均调用同一
 exact core。`items.py` 的 `add_item`、`update_item`、`next_id`、`generate_index` 与
-`check_dependencies` 不接受 project path，也不执行 discovery。
+`check_dependencies` 不接受 project path，也不执行 discovery。`patch_item` 在同一锁内比较
+expected revision、验证依赖、识别 no-op，并仅在有实际变更时生成新 revision、写入 item 和重建 index；
+`update_item` 保留为只返回条目的兼容 wrapper。
 
 管理员可使用 `provision-store --project-id <id> --id-prefix <prefix>` 为由 `--target`/CWD 解析的 legacy
 root 创建 manifest。该路径要求 root、`items/`、`INDEX.md` 均为 contained regular entries，验证每个 item 的
@@ -116,14 +118,27 @@ root 创建 manifest。该路径要求 root、`items/`、`INDEX.md` 均为 conta
 已有 manifest。最终 manifest 检查、完整 item 验证、publish 与 post-publish load 都在与 normal mutation
 共享的 store lock 内执行。
 
+### Agent JSON 与 work queue
+
+`list` 与 `show` 的 JSON 条目同时保留声明 `status` 和派生 `effective_status`，并以 `blocked_by` 返回未完成或
+缺失的依赖。`add` 与 `update` 的 JSON data 是 mutation receipt：`before`、`result`、`changed_fields`、
+`revision`、`no_op` 和 store identity 均在一次调用中返回。revision conflict 使用稳定的
+`REVISION_MISMATCH` error code；其他可预期输入错误使用 `INVALID_INPUT`，找不到条目使用
+`ITEM_NOT_FOUND`。
+
+`next --json` 是 Agent work queue：每条记录有 `queue_state`（`in_progress`、`ready` 或 `blocked`）与
+`blocked_by`，队列按状态、priority、ID 确定性排序。队列只暴露 `score_hint` 作为兼容解释信息，不能当作
+任务完成度或编排决定。未指定 `--status` 时返回全部三态；显式 `--status todo|in_progress|blocked` 按
+effective status 过滤。非 JSON 的 `next` 和其他 human/admin commands 保持原有兼容表面。
+
 ### 推荐排序
 
 ```
 score = priority_weight × impact_weight × effort_weight
 ```
 
-done/cancelled 条目 score=0。`next` 只推荐 todo/in_progress；`list --sort score`
-仍可显示 blocked 条目的 score。
+done/cancelled 条目 score=0。非 JSON 的 `next` 只推荐 todo/in_progress；`list --sort score`
+仍可显示 blocked 条目的 score。Agent JSON work queue 不以 score 排序。
 
 ## 模块接口
 
@@ -168,6 +183,7 @@ update_legacy_item(item_id: str, updates: dict, project_path: Path | None, expec
 # Exact portable core API.
 add_item(item: BacklogItem, store: StoreContext) -> Path
 update_item(item_id: str, updates: dict, store: StoreContext, expected_revision: str | None) -> BacklogItem | None
+patch_item(item_id: str, updates: dict, store: StoreContext, expected_revision: str | None) -> PatchResult | None
 next_id(store: StoreContext) -> str
 generate_index(store: StoreContext) -> str
 check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> None

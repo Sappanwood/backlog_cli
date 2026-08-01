@@ -7,6 +7,7 @@ import os
 import re
 import stat
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -25,6 +26,20 @@ class BacklogItemParseError(ValueError):
         self.filepath = filepath
         self.original_error = original_error
         super().__init__(f"Failed to parse item file {filepath}: {original_error}")
+
+
+class RevisionConflictError(ValueError):
+    """Raised when a patch's optimistic revision does not match the current item."""
+
+
+@dataclass(frozen=True, slots=True)
+class PatchResult:
+    """The complete outcome of one item patch."""
+
+    before: BacklogItem
+    result: BacklogItem
+    changed_fields: list[str]
+    no_op: bool
 
 
 def _dump_post(post: frontmatter.Post) -> str:
@@ -415,13 +430,13 @@ def _jsonify(value):
     return value
 
 
-def update_item(
+def patch_item(
     item_id: str,
     updates: dict,
     store: StoreContext,
     expected_revision: str | None = None,
-) -> BacklogItem | None:
-    """Patch one item through an exact StoreContext with optimistic revision checking."""
+) -> PatchResult | None:
+    """Patch one item and return its complete mutation outcome."""
     if "id" in updates and updates["id"] != item_id:
         raise ValueError("Item ID cannot be changed.")
     if "project" in updates and updates["project"] != store.manifest.project_id:
@@ -443,7 +458,9 @@ def update_item(
         if current.id != item_id:
             raise ValueError(f"Item frontmatter ID '{current.id}' does not match physical item ID '{item_id}'.")
         if expected_revision is not None and current.revision != expected_revision:
-            raise ValueError(f"Revision mismatch: expected '{expected_revision}', but current is '{current.revision}'")
+            raise RevisionConflictError(
+                f"Revision mismatch: expected '{expected_revision}', but current is '{current.revision}'"
+            )
         if "depends_on" in updates:
             check_dependencies(item_id, updates["depends_on"], store)
 
@@ -455,18 +472,48 @@ def update_item(
         for key, value in updates.items():
             if value is not None:
                 current_data[key] = _jsonify(value)
-        if current_data.get("status") != Status.DONE.value:
+        if current_data.get("status") == Status.DONE.value:
+            if current.status != Status.DONE or current.fixed_at is None:
+                current_data["fixed_at"] = date.today().isoformat()
+        else:
             current_data.pop("fixed_at", None)
+
+        updated = BacklogItem.model_validate(current_data)
+        _validate_item_identity(updated, store)
+        compared_fields = set(current_data) | set(
+            updated.model_dump(mode="json", exclude={"score", "effective_status"})
+        )
+        changed_fields = sorted(
+            field
+            for field in compared_fields - {"updated", "revision", "is_blocked", "extra"}
+            if _jsonify(getattr(current, field, None)) != _jsonify(getattr(updated, field, None))
+        )
+        if not changed_fields:
+            return PatchResult(before=current, result=current, changed_fields=[], no_op=True)
+
         current_data["updated"] = date.today().isoformat()
         current_data["revision"] = uuid.uuid4().hex[:8]
-
         updated = BacklogItem.model_validate(current_data)
         _validate_item_identity(updated, store)
         filepath = _store_item_path(item_id, store)
         _prepare_mutation_publication(filepath, store)
         _replace_item(filepath, updated)
         _rebuild_index_silent(store)
-        return show_item(item_id, store)
+        result = show_item(item_id, store)
+        if result is None:
+            raise RuntimeError(f"Updated item '{item_id}' disappeared before it could be read.")
+        return PatchResult(before=current, result=result, changed_fields=changed_fields, no_op=False)
+
+
+def update_item(
+    item_id: str,
+    updates: dict,
+    store: StoreContext,
+    expected_revision: str | None = None,
+) -> BacklogItem | None:
+    """Compatibility wrapper returning only the patched item."""
+    outcome = patch_item(item_id, updates, store, expected_revision=expected_revision)
+    return outcome.result if outcome is not None else None
 
 
 def _render_index(items: list[BacklogItem]) -> str:
