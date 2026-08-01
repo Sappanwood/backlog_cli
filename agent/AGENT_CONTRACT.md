@@ -1,7 +1,5 @@
-# Backlog CLI — AI Agent 操作手册
+# Backlog CLI — 旧 Agent 链接
 
-本文件保留为旧链接兼容入口。AI Agent 使用 `backlog` 工具时，应直接读取
+旧链接兼容跳转，请改读以下 repo-owned 的唯一 Agent skill：
+
 [../skills/backlog/SKILL.md](../skills/backlog/SKILL.md)。
-
-`skills/backlog/SKILL.md` 是 repo-owned skill，也是命令、字段、JSON 契约、状态流转和跨项目
-调用规则的单一源头。全局 skill 目录应通过 symlink 指向该 repo-owned skill，避免复制维护。

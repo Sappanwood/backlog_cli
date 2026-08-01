@@ -2,17 +2,29 @@
 
 ## 架构概览
 
-三层结构，上层依赖下层：
+图意：箭头表示调用与数据流，而不是 Python 模块 import 或依赖关系。两条 CLI 入口都先构造
+`StoreContext`，再将它作为输入传给 `items.py` exact core：
 
 ```mermaid
 flowchart TD
-    CLI[cli.py - Typer CLI] --> Legacy[legacy adapter - temporary target/CWD compatibility]
-    Legacy --> Items[items.py - exact StoreContext CRUD & I/O]
-    Items --> Models[models.py - Data Models]
-    Items --> Store[store.py - StoreManifest and StoreContext]
-    Store --> FS[(exact backlog/items/*.md)]
-    CLI --> Rich[Rich Console/Tables]
+    CLI[cli.py - Typer CLI] --> Exact[exact `--store` entry]
+    CLI --> Legacy[legacy `--target` / CWD]
+    Exact --> StrictLoad[strict `load_store()`]
+    StrictLoad --> Context[StoreContext]
+    Legacy --> Adapter[legacy resolution adapter]
+    Adapter --> HasManifest{manifest exists?}
+    HasManifest -->|yes| StrictLoad
+    HasManifest -->|no| Temporary[compatibility temporary context]
+    Temporary --> Context
+    Context --> Items[items.py - exact core CRUD & I/O]
+    Items <-->|items and INDEX| Files[(exact backlog/items/*.md)]
+    Items --> Result[JSON data or human render data]
+    Result --> CLI
 ```
+
+`store.py` 实现 strict `load_store()` 与 `StoreContext`。exact `--store` 总是 strict load；legacy adapter
+只有在 manifest exists 时才 strict load，manifestless 时构造 compatibility temporary context。两条路径产生的
+`StoreContext` 都是 `Items` exact core 的输入；core 不读取 Catalog，也不执行目录 discovery。
 
 ## 核心技术栈
 
@@ -36,7 +48,7 @@ backlog/
 └── INDEX.md
 ```
 
-`backlog.json` 是严格 schema，且只能包含以下字段：
+`backlog.json` 是 store identity 的唯一 authority，是严格 schema，且只能包含以下字段：
 
 ```json
 {
@@ -99,12 +111,12 @@ Markdown 正文（body）
 
 ### CLI Store 入口与 Legacy 项目发现流程
 
-`backlog --store <absolute-exact-root> <command>` 是权威 CLI entrypoint。CLI callback 通过
+`backlog --store <absolute-exact-root> <command>` 是权威 CLI entrypoint。exact core 的 CLI callback 通过
 `load_store()` 严格载入 manifest；它不会从 parent、child、Repo、Project Ops 或 CWD 推导 store。
 `--store` 不能与 `--target` 同时使用，invalid store 或 option combination 在 JSON 调用中返回稳定的
 `STORE_INVALID` 或 `INVALID_INPUT` error envelope 和非零退出码。
 
-旧 `--target` / CWD 布局解析是临时 outer adapter：显式 target 优先 `<target>/backlog/`，否则使用
+旧 `--target` / CWD 布局解析是 temporary compatibility adapter：显式 target 优先 `<target>/backlog/`，否则使用
 `<target>/docs/backlog/`；未传 target 时才向上发现 `docs/backlog/`。若 legacy root 已有 manifest，adapter
 严格载入它；否则仅在 adapter 层以既有布局和持久 item identity 构造 temporary context。两条入口均调用同一
 exact core。`items.py` 的 `add_item`、`update_item`、`next_id`、`generate_index` 与
@@ -193,6 +205,21 @@ check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> 
 `store.load_store()` 获得准确的 `StoreContext`，它们不会检查 CWD、项目路径或 legacy layout，也不会创建任何文件。
 CLI 通过明确命名的 legacy adapter 保持既有 `<target>/backlog/`、`<target>/docs/backlog/` 和 CWD
 discovery 行为；该 adapter 不属于 portable core。
+
+## 宿主与工作流责任边界
+
+backlog-cli 的 exact core 只接收 StoreContext，负责 item CRUD、依赖计算、revision、原子索引和 JSON
+envelope。`backlog.json` 是 store identity 的唯一 authority；core 不读取项目名、Workspace Catalog、
+Project Ops 路径或 workflow 状态。
+
+Workspace Control 是本机宿主：它从 Catalog resolved context 找到 `backlog/store@1` exact root，并以
+`backlog --store` 调用本工具；它负责项目路由、typed descriptor 与开发服务，不能复制 backlog CRUD。
+Sigil 是执行工作流：它负责 run、claim、checkpoint、submission、review、worktree、调度和完成判断。
+这些运行时状态不写入 `backlog/Store@1`；backlog item 只保留跨会话的任务意图和验收边界。
+
+`--target` 与 CWD discovery 是 compatibility adapter，而非新的宿主集成 API。它们先解析为一个 exact
+store，再调用同一 exact core；人类 Rich/CSV、`stats`、`index`、`edit` 和 `--fixed` 也保留在此兼容/管理
+表面。
 
 ## 关键设计决策
 

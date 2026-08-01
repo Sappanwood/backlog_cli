@@ -1,328 +1,115 @@
 ---
 name: backlog
 description: |
-  backlog 任务管理工具。当需要读取、记录、更新项目待办条目时使用。
-  通过项目注册表解析出的 backlog-cli 操作 Project Ops 中的 backlog 条目与索引，
-  提供 list/show/add/update/stats/next/index/edit 子命令，
-  支持按优先级、状态、分类过滤和评分排序。
+  管理 portable Backlog Store 的 Agent 契约。通过 host 的 Catalog resolver 获取 exact store，
+  以 JSON 调用 list、show、add、update、next。
 license: MIT
 metadata:
   audience: developer
   framework: backlog-cli
 ---
 
-# Backlog — CLI 任务管理
+# Backlog — Agent 操作契约
 
-本文档是 AI Agent 使用 `backlog` 工具的标准契约，也是 repo-owned skill 的单一源头。
-全局 skill 入口应通过 symlink 指向本目录，避免在全局配置中复制维护另一份说明。
+本文档是 repo-owned 的唯一 Agent skill authority。全局 skill 入口只能通过 symlink 指向本目录；
+旧链接由 `agent/AGENT_CONTRACT.md` 跳转到这里。
 
-`backlog` 是轻量级任务管理 CLI。每个条目对应
-`<backlog-root>/items/<ID>.md`，使用 YAML frontmatter 承载结构化数据，Markdown 正文承载
-任务意图与验收边界。CLI 负责 ID 生成、frontmatter 更新、状态流转、统计和 `INDEX.md`
-重建。
+`backlog` 是 Git-native、Markdown-first 的 portable task-intent ledger。一个
+`backlog/Store@1` 保存跨会话的任务意图、验收边界、声明状态、依赖和 revision；它不负责项目路由、
+执行调度或任务是否真的完成。
 
 ## 触发时机
 
-当任务涉及 backlog 管理时加载本 skill：
-- 用户要求「记录一个待办」「帮我记一下」「加到 backlog」
-- 用户要求「看看还有什么没做完」「还有哪些 bug」「推荐做啥」
-- 用户要求「标记完成」「更新状态」「设置优先级」
-- 用户要求「查看 backlog 统计」「生成索引」
-- 当前开发任务明确对应某个 backlog ID，需要开始、完成或更新该条目
-- 在项目开发过程中确认发现了新的 bug、技术债或后续任务，且值得跨会话保留
+仅在用户要求查询、创建或更新 backlog，或当前工作明确对应 backlog ID 时加载本 skill。普通问答不主动
+查询或修改 backlog。
 
-不要因为普通问答或只读解释自动查询 backlog；只有进入项目开发、计划、任务选择或 backlog
-CRUD 场景时才主动操作。
+## Agent 官方快速路径
 
-## Catalog descriptor 路径解析
-
-所有已注册项目的 backlog 操作前，按 `/home/ling/workspace/AGENTS.md` 的 Catalog 路由规则运行
-`/home/ling/workspace/workspace-control/bin/workspace project resolve <target> --catalog /home/ling/workspace/workspace-control/catalog/workspace.json --json`。
-对 project scope，要求唯一的 `backlog/store@1` descriptor，记 `dirname(root)` 为 `<backlog-target>`，并读取 resolved Repo 的 `AGENTS.md`。对 workspace scope，要求 `workspace/artifacts@1` source descriptor 并确认其直接子目录 `backlog/` 是唯一 backlog root，记 source root 为 `<backlog-target>`。两种 scope 都不得从路径猜测或回退到 Repo 内创建 `docs/backlog/`。
-
-只有处理未注册的独立 Repo 时，才允许依赖 `backlog` 从当前工作目录向上查找
-`docs/backlog/`。
-
-## 调用范式
-
-Agent 的权威入口是 exact store：
+Host 先通过 Catalog resolver 取得 exact `backlog/store@1` root，再调用 CLI；Workspace Control 负责从项目
+或 workspace 上下文解析该 root，backlog-cli 不读取 Catalog，也不猜测路径。
 
 ```bash
-backlog --store <absolute-backlog-root> <子命令>
+/home/ling/workspace/workspace-control/bin/workspace project resolve <target> \
+  --catalog /home/ling/workspace/workspace-control/catalog/workspace.json --json
 ```
 
-`--store` 必须是绝对的准确 `backlog/` root，且已有有效 `backlog.json`、`items/` 和 `INDEX.md`；它不执行
-parent、child、Repo、Project Ops 或 CWD discovery，且不能与 `--target` 并用。`--target` 与 CWD discovery
-只保留为既有调用的 compatibility adapter：`--target` 必须指定 project descriptor root 的 parent，或
-workspace `workspace_artifacts.root` source root。backlog-cli 在 adapter 层解析唯一 `backlog/` store 后进入相同 core。
+成功 envelope 的 project scope 使用 `data.artifacts.backlog.root` 作为 exact store。它必须是绝对路径，且已
+包含有效 `backlog.json`、`items/` 和 `INDEX.md`。无唯一 resolved context 或 store 无效时停止并报告；不要
+改用目录名、parent、child、Repo 或 Project Ops 路径。
 
-若 PATH 中的 `backlog` 入口不可用或模块环境损坏，从同一 Catalog resolved context 获取
-`id == "backlog-cli"` 的唯一 project repo，将其记为 `<backlog-cli-repo>`，再使用：
+所有官方调用都使用：
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --store <absolute-backlog-root> <子命令>
+backlog --store <absolute-backlog-root> <子命令> --json
 ```
 
-`<backlog-cli-repo>` 必须来自 Catalog resolved context，不得使用历史固定路径。若 backlog fallback 也不可用，
-才回退为直接编辑 `<backlog-target>/backlog/items/*.md`。回退后必须用等价方式同步
-`<backlog-target>/backlog/INDEX.md`，并在回复中说明未能使用 CLI。
+官方快速路径只包含 `list`、`show`、`add`、`update`、`next` 五个操作：
 
-## 命令速查
+| 意图 | JSON 调用 |
+|---|---|
+| 查询条目 | `list --status todo --json` |
+| 获取完整条目 | `show <ID> --json` |
+| 创建条目 | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md --json` |
+| patch 条目 | `update <ID> --status in_progress --expected-revision <REV> --json` |
+| 获取工作队列 | `next -n 5 --json` |
 
-| 意图 | 命令 |
-|------|------|
-| 查看所有待办 | `list --status todo` |
-| 按优先级过滤 | `list --priority P0,P1 --status todo` |
-| 按分类过滤 | `list -c bug --status todo` |
-| 查看人类兼容推荐 | `next -n 5` |
-| 查看 Agent work queue (JSON) | `next -n 5 --json` |
-| 查看完整条目 | `show <ID>` |
-| 开始做一条 | `update <ID> -s in_progress` |
-| 标记完成 | `update <ID> --fixed` |
-| 取消/关闭 | `update <ID> -s cancelled` |
-| 设置依赖关系 | `update <ID> --depends-on INK-001,INK-002` |
-| 设置相关文档 | `update <ID> --related-docs docs/ARCHITECTURE.md,project-ops:plans/plan.md` |
-| 新增快速记录 | `add -T "标题" -c <category> --priority P1 -b "一句话描述" [-e S] [-i high]` |
-| 新增可执行条目 | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md` |
-| 通过管道新增 | `cat body.md \| backlog add ... --stdin` |
-| 更新条目字段 | `update <ID> --title "新标题" --priority P2 [-b "更新后的描述"]` |
-| 替换正文(文件) | `update <ID> --body-file /tmp/body.md` |
-| 替换正文(管道) | `cat body.md \| backlog update <ID> --stdin` |
-| 编辑正文(管道) | `cat body.md \| backlog edit <ID> --stdin` |
-| 查看统计 | `stats` |
-| 查看统计 (JSON) | `stats --json` |
-| 生成总览索引 | `index` |
-| 编辑正文(交互) | `edit <ID>` |
+`--store` 放在子命令前。官方调用只消费 JSON envelope。
 
-## Backlog Item Body Contract
+## Agent 契约：JSON、revision 与状态
 
-Backlog item 是任务意图与验收边界的权威来源，不预先描述具体 Agent、运行阶段或调度方式。
-Agent 创建或补全一个准备交付执行的 item 时，正文默认包含 `Intent` 和
-`Acceptance Criteria`：
+成功结果为 `{"ok": true, "data": ...}`，退出码为 0。操作失败为
+`{"ok": false, "error": {"code": "...", "message": "...", "details": {}}}`，退出码为 1；CLI usage
+error 退出码为 2。常见稳定错误码有 `STORE_INVALID`、`INVALID_INPUT`、`ITEM_NOT_FOUND`、
+`ITEM_CONFLICT`、`PARSING_ERROR` 和 `REVISION_MISMATCH`。
+
+`add` 与 `update` 的 `data` 是 mutation receipt，包含 `before`、`result`、`changed_fields`、`revision`、
+`no_op` 和 store identity。读取条目取得 revision 后，使用
+`update <ID> --expected-revision <REV> ... --json` 防止覆盖并发修改；`no_op: true` 表示没有写入 item 或 index。
+
+`status` 是持久化的声明状态。`effective_status` 与 `blocked_by` 是读取时依据未完成或缺失依赖派生的视图，
+不应由 Agent 持久化。`list --json` 与 `show --json` 都返回三者；`next --json` 返回 `queue_state`
+（`in_progress`、`ready` 或 `blocked`）和 `blocked_by`。`next` 的 `score_hint` 只解释兼容排序，不能用于
+编排或完成度判断。
+
+<a id="Backlog-Item-Body-Contract"></a>
+
+## Agent 责任：正文完整性
+
+Backlog item 的 Markdown body 是任务意图与验收边界的 authority。准备交付执行的 item 至少应包含：
 
 ```markdown
 ## Intent
 
-说明当前问题、为什么值得处理，以及完成后应产生的可观察变化。描述 what/why，不预先规定
-how。
+说明 what/why 与完成后的可观察变化。
 
 ## Acceptance Criteria
 
-- 列出 Reviewer 可以明确判断通过或失败的结果。
-- 根据任务风险覆盖必要的成功行为、失败行为和关键边界。
+- 列出可验证的通过或失败结果，以及必要的边界。
 ```
 
-只有存在实际信息时才添加以下可选章节，不为模板完整性创建空章节：
+有实际信息时才补充 `Boundaries` 或 `Decision Boundaries`。正文描述目的和可观察结果，不预先规定内部
+实现。CLI 只保存正文，不机械判定其是否可执行；派发该 item 的 host、workflow 或 reviewer 负责确认
+目标和验收边界足够完整。单行 `-b` 只适合快速捕获，使用 `--body-file` 或 `--stdin` 传递多行正文。
 
-```markdown
-## Boundaries
+## 按需参考：人类、管理员与兼容入口
 
-- 记录必须保持的兼容行为、明确排除的范围或不可违反的约束。
+以下内容不属于 Agent 官方快速路径，按需要再读取或使用：
 
-## Decision Boundaries
+| 类别 | 保留能力 | 用途 |
+|---|---|---|
+| 人类输出 | Rich table、CSV、非 JSON `next` | 交互式浏览和兼容推荐 |
+| 人类快捷方式 | `edit`、`update --fixed` | TTY 编辑；`--fixed` 等同完成快捷方式，Agent 应明确用 `--status done` |
+| 管理与维护 | `stats`、`index`、`provision-store`、`validate-store` | 概览、索引修复、legacy store manifest provisioning/validation |
+| 低频字段 | `effort`、`impact`、`score`、`extra`、`tags`、`source`、`related_docs` | 可选检索或兼容元数据，不是 Agent 创建任务时的默认决策 |
+| compatibility | `--target` 与 CWD discovery | 既有调用的 outer adapter，先解析为 exact store 后才进入同一 core |
 
-- 说明 Agent 可以自主决定的事项。
-- 说明哪些情况必须停止并向用户报告或请求决策。
-```
+`backlog.json` 的 `schema`、`project_id` 与 `id_prefix` 是 exact store identity 的 authority。item 的
+`project` 和 ID prefix 必须与 manifest 一致；Agent 不预先计算 ID。`depends_on` 与 `related_docs` 可在确有
+事实时设置，前者用条目 ID，后者使用 Repo 相对路径或 `project-ops:` 逻辑引用。
 
-正文生成规则：
+未注册的独立 Repo 可以使用 legacy discovery；已注册项目不得这样做。管理员处理 legacy store 时，可先用
+`--target`/CWD adapter 执行 `validate-store`，再用 `provision-store --project-id <id> --id-prefix <prefix>` 创建
+manifest。不要以此为新 Agent integration 新增路径猜测分支。
 
-- `Intent` 描述稳定的目的和结果，不把暂定实现思路、文件列表、工具选择或执行步骤写成要求。
-- `Acceptance Criteria` 使用可观察、可验证的结果；除非实现方式本身是已接受的架构约束，
-  不规定类名、函数名、算法或内部模块划分。
-- 已确定的架构决策和计划通过 `related_docs` 引用，优先使用逻辑路径和 section
-  anchor；正文只提取直接影响本 item 的边界，不复制整份文档。
-- 条目依赖使用 `depends_on` 表达。仅当依赖如何影响当前任务并不明显时，才在正文补充说明。
-- Repo `AGENTS.md` 中的默认测试、文档同步和质量门禁自动适用；只有需要增加、缩小或偏离
-  默认要求时才写入正文。
-- 不编造缺失的产品或架构决策。若缺失信息会实质改变目标、验收边界或公开契约，先向用户
-  询问；否则保留给执行 Agent 判断。
-
-一句话 `-b` 适合快速捕获尚未充分定义的 seed、提醒或后续调查线索。它本身不代表 item 已
-达到可执行标准。准备交给 Agent 或 orchestrator 执行时，使用 `--body-file` 或 `--stdin`
-写入上述最小正文。
-
-判断 item 是否足以执行时，不按正文长度或可选章节数量判定，而检查：
-
-1. 具备项目所需能力的 Agent 能否在不追问已有事实的情况下开始工作；
-2. Reviewer 能否根据 item 与 `related_docs` 判断通过或失败；
-3. 真正不可违反的边界是否明确；
-4. 未被锁定的实现选择是否仍留给执行 Agent。
-
-CLI 当前只负责保存正文，不机械验证这些语义要求。消费 item 的 workflow 或 orchestrator 应在
-派发前执行完整性检查，并拒绝目标或验收边界不足的条目。
-
-## 自动行为边界
-
-Agent 可在以下场景主动操作 backlog，但必须满足对应前提。
-
-### 进入项目开发或任务选择
-
-当用户要求选择下一项任务、查看项目待办、进入开发规划，或当前请求明显需要 backlog 上下文时：
-
-```bash
-backlog --target <backlog-target> list --status todo
-```
-
-或查看推荐：
-
-```bash
-backlog --target <backlog-target> next -n 5
-```
-
-### 开始处理已知条目
-
-只有当当前任务明确对应某个 backlog ID 时，才标记进行中：
-
-```bash
-backlog --target <backlog-target> update <ID> -s in_progress
-backlog --target <backlog-target> index
-```
-
-### 完成已知条目
-
-只有当当前任务明确对应某个 backlog ID，且代码、文档、测试验收已完成时，才标记完成：
-
-```bash
-backlog --target <backlog-target> update <ID> --fixed
-backlog --target <backlog-target> index
-```
-
-不要因为完成了一个临时用户请求而猜测性关闭 backlog 条目。
-
-### 记录新问题或技术债
-
-只有当 bug、技术债或后续任务已经被确认，且值得跨会话保留时才新增条目：
-
-```bash
-backlog --target <backlog-target> add -T "描述" -c <bug|refactor|perf|feature|ux|docs> --priority <P1|P2> -e <XS|S|M|L|XL> -i <high|medium|low> -b "一句话说明背景、目标或验收标准"
-backlog --target <backlog-target> index
-```
-
-该形式用于快速捕获。如果问题已经足够明确并准备交付执行，按
-`Backlog Item Body Contract` 编写多行正文，并使用 `--body-file /tmp/body.md` 或 `--stdin`，
-避免把多行 Markdown 塞进 `-b`。
-
-### 查看整体进度
-
-用户关注进度，或完成一组 backlog 操作后：
-
-```bash
-backlog --target <backlog-target> stats
-```
-
-## 数据模型
-
-```yaml
-id: "ZHI-001"          # exact store 自动生成：manifest id_prefix + 三位序号
-project: "zhijian"     # exact store 项目标识（manifest project_id）
-title: "标题"
-category: feature      # bug | a11y | ux | i18n | testing | feature | refactor | perf | docs | architecture | security | research | ops
-priority: P1           # P0(最高/影响发布) > P1(严重) > P2(中等) > P3(低)
-effort: M              # XS | S | M | L | XL
-impact: high           # high | medium | low
-status: todo           # todo | in_progress | done | cancelled | blocked
-source: ""             # 来源标签（如 ui-audit-2026-04-27）
-tags: [tag1, tag2]
-depends_on: []         # 前置依赖的条目 ID
-related_docs: []       # 相关文档逻辑引用，如 docs/ARCHITECTURE.md 或 project-ops:plans/plan.md
-fixed_at: null         # 完成日期；仅 status=done 时有效（--fixed 自动设为今天）
-created: "2026-04-27"
-updated: "2026-04-27"
-```
-
-`body` 字段存于 YAML frontmatter 之外，不在 frontmatter 区块内。`show <ID>` 会完整展示正文。
-
-## 排序规则
-
-非 JSON 的 `next` 和 `list --sort score` 使用的兼容推荐分数：
-
-```text
-score = priority_weight * impact_weight * effort_weight
-```
-
-| Priority | Weight | Impact | Weight | Effort | Weight |
-|----------|--------|--------|--------|--------|--------|
-| P0 | 100 | high | 3 | XS | 10.0 |
-| P1 | 50 | medium | 2 | S | 5.0 |
-| P2 | 10 | low | 1 | M | 2.0 |
-| P3 | 1 | | | L | 1.0 |
-| | | | | XL | 0.5 |
-
-高影响 + 小工作量的条目排最前。done/cancelled 条目 score=0。该 score 只用于兼容解释，不能作为
-Agent 的任务选择、完成度判断或工作流编排决策。
-
-- `list --sort score`：按 score 展示所有匹配条目，包含 `blocked`
-- 非 JSON `next`：只推荐 `todo` / `in_progress`，排除 `blocked`、`done`、`cancelled`
-- `next --json`：返回完整 Agent work queue；每个活跃条目都有 `queue_state`（`in_progress`、`ready`、
-  `blocked`）、`blocked_by` 和 `score_hint`（不返回裸 `score`），并以状态、priority、ID 确定性排序；
-  未指定 `--status` 返回全部三态，显式 `--status todo|in_progress|blocked` 按 effective status 过滤
-- `list --json` 和 `show --json`：每个条目包含声明 `status`、派生 `effective_status` 和 `blocked_by`
-
-## 操作约定
-
-- 新增条目时必须提供 `-T`（标题）、`-c`（分类）、`--priority`（优先级）。exact store 从 manifest 取得项目名和 ID prefix；legacy adapter 仅为兼容而保留历史推导。
-- 快速捕获 seed、提醒或调查线索时可使用 `-b "描述"`；准备交付执行的 item 按
-  `Backlog Item Body Contract` 使用多行正文。
-- ID 自动生成：exact store 使用 manifest `id_prefix`，格式为 `<PREFIX>-<三位序号>`，如 `ZHI-001`。
-- `update` 只修改明确传入的字段，其余保持不变。
-- `related_docs` 保存与条目相关的 Repo 文档或 Project Ops artifact 逻辑引用。`--related-docs` 传入逗号分隔列表并替换整个列表。CLI 只做 trim/去空，不检查路径是否存在。
-- `--fixed` 是兼容快捷方式，等于 `-s done` + 自动填写 `fixed_at`；Agent 直接使用 `--status done`，同样自动填写。
-- `fixed_at` 只属于 `done`。当条目从 `done` 改回 `todo` / `in_progress` / `blocked` / `cancelled` 时，工具会清除 `fixed_at`。
-- 具有未完成前置依赖的条目，在读取/渲染视图时有效状态 `effective_status` 为 `blocked`，但底层 Markdown 数据仍保持其声明状态。更新操作不会将计算出的临时 `blocked` 状态持久化。
-- Agent 官方操作仅为 `list`、`show`、`add`、`update`、`next`，均使用 `--json`。成功时输出
-  `{"ok": true, "data": ...}` 并退出 0；操作失败时输出
-  `{"ok": false, "error": {"code": "...", "message": "...", "details": {}}}` 并退出 1；CLI usage error
-  退出 2。常见错误码包括 `PARSING_ERROR`、`ITEM_CONFLICT`、`ITEM_NOT_FOUND`、`INVALID_INPUT`、
-  `REVISION_MISMATCH`。
-- `add` 与 `update` 的 `data` 是 mutation receipt，包含 `before`、`result`、`changed_fields`、
-  `revision`、`no_op` 及 store identity。读取当前 revision 后，`update --expected-revision <REV>` 可避免覆盖
-  并发修改；值未改变时返回 `no_op: true` 且不会写入 item 或 index。
-- 单行快速记录使用 `-b "一句话描述"`；可执行正文使用 `--body-file /tmp/body.md` 或
-  `--stdin`。
-- 禁止通过 `-b "line1\nline2"` 传递多行，`\n` 不会被 shell 展开。
-- `--stdin` 和 `--body-file` 为二进制安全通道。
-- 非 TTY 环境中 `edit <ID>` 会报错退出；应改用 `edit <ID> --stdin` 或 `update <ID> --stdin`。
-- `next --json` 返回 work queue，而不是任务编排或完成度判断；它不包含 done/cancelled 项，空队列返回空数组。
-- 每个条目均在 frontmatter 包含 `revision` 数据指纹。使用 `update` 修改条目时，可传入 `--expected-revision <REV>` 进行乐观锁校验。
-- 新增条目时无需前置在外部计算 ID，底层在安全锁内计算 `next_id()`，能避免多 Agent 并发写入时分配重复 ID。
-
-## 跨项目使用
-
-通过 `--target` 参数切换目标。已注册项目先按 Workspace `AGENTS.md` 的 Catalog descriptor 规则得到
-`<backlog-target>`；project 使用 `backlog/store@1` parent，workspace 使用 `workspace/artifacts@1` source root。不得拼接旧 Project Ops 路径或使用固定路径 fallback。
-
-```bash
-backlog --target <backlog-target> stats --json
-```
-
-操作前先 `git status --short` 检查目标项目工作区状态，避免覆盖用户正在编辑的内容。
-
-## 常用组合
-
-```bash
-# 列出 todo
-backlog --target <backlog-target> list --status todo
-
-# 推荐下一批
-backlog --target <backlog-target> next -n 5
-
-# 查看条目
-backlog --target <backlog-target> show <ID>
-
-# 新增快速记录
-backlog --target <backlog-target> add -T "标题" -c feature --priority P1 -e M -i high -b "一句话描述"
-
-# 新增可执行条目（正文包含 Intent 与 Acceptance Criteria）
-backlog --target <backlog-target> add -T "标题" -c feature --priority P1 --body-file /tmp/body.md
-
-# 更新字段
-backlog --target <backlog-target> update <ID> --priority P2
-
-# 完成条目并重建索引
-backlog --target <backlog-target> update <ID> --fixed
-backlog --target <backlog-target> index
-
-# 获取推荐列表 JSON
-backlog --target <backlog-target> next -n 3 --json
-```
+完整的人类安装、示例与产品边界见 [README.md](../../README.md)，实现和数据流见
+[docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)。

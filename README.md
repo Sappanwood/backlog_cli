@@ -1,14 +1,14 @@
 # Backlog CLI
 
-Backlog CLI is a lightweight file-based task tracker for projects. It stores each item as a Markdown file under
-`backlog/items/` for Project Ops targets or `docs/backlog/items/` for repository targets, with YAML frontmatter
-for structured fields and Markdown body text for context.
+Backlog CLI is a Git-native, Markdown-first portable task-intent ledger. A `backlog/Store@1` stores each item as
+Markdown with YAML frontmatter and a Markdown body for its intent and acceptance boundary. It can live in Project
+Ops, an independent repository, or another host without a database.
 
 The tool is designed for both human developers and AI agents:
 
 - humans get readable Markdown files and git-friendly diffs
 - agents get stable commands, JSON output, and a documented operation contract
-- backlog data can live in a Project Ops directory or inside a repository, without a database
+- hosts can supply the same portable store without coupling the core to their own routing model
 
 ## Install
 
@@ -25,17 +25,18 @@ In a checked-out development environment, the local virtualenv command also work
 ./.venv/bin/backlog --help
 ```
 
-## Basic Usage
+## Portable Store and Basic Usage
 
-The authoritative interface accepts an exact, absolute portable store root. It must already contain a valid
-`backlog.json`, `items/`, and `INDEX.md`; read commands do not create files or discover parent/child directories.
-Mutations use an advisory lock on the canonical store directory inode and do not create a `.lock` file in the store.
+The exact core accepts an exact, absolute portable store root. `backlog.json` is store identity's sole authority:
+it declares `schema: "backlog/Store@1"`, `project_id`, and `id_prefix`. The root must already contain that manifest,
+`items/`, and `INDEX.md`; read commands do not create files or discover parent/child directories. Mutations use an
+advisory lock on the canonical store directory inode and do not create a `.lock` file in the store.
 
 ```bash
 uv run backlog --store /absolute/path/to/backlog list --status todo
 uv run backlog --store /absolute/path/to/backlog next -n 5 --json
 uv run backlog --store /absolute/path/to/backlog show PRO-001
-uv run backlog --store /absolute/path/to/backlog update PRO-001 --fixed
+uv run backlog --store /absolute/path/to/backlog update PRO-001 --status done --json
 uv run backlog --store /absolute/path/to/backlog stats
 ```
 
@@ -62,7 +63,8 @@ uv run backlog --store /absolute/path/to/backlog add \
 ```
 
 `--target` and CWD discovery remain compatibility adapters for existing `backlog/` and `docs/backlog/` layouts.
-They cannot be combined with `--store`. To adopt an existing legacy store, first ensure it has regular `items/` and
+They cannot be combined with `--store`; each adapter resolves one store before entering the same exact core. To adopt
+an existing legacy store, first ensure it has regular `items/` and
 `INDEX.md` entries, then provide its identity explicitly; the command rejects existing manifests and item identity
 conflicts without overwriting them:
 
@@ -110,7 +112,10 @@ AI agents should use the repo-owned skill at [skills/backlog/SKILL.md](skills/ba
 and behavior contract. That document is the source of truth for agent-safe invocation patterns, JSON parsing,
 status transitions, and cross-project usage.
 
-The five official Agent operations are `list`, `show`, `add`, `update`, and `next`, each invoked with `--json`.
+The host first resolves the exact store. In the Workspace Control environment, its Catalog resolver owns project or
+workspace routing and passes the resulting `backlog/store@1` root to `backlog --store`; backlog-cli never reads that
+Catalog. The five official Agent operations are `list`, `show`, `add`, `update`, and `next`, each invoked with
+`--json`.
 Every successful call returns `{"ok": true, "data": ...}` and every failure returns
 `{"ok": false, "error": {"code", "message", "details"}}`; successful calls exit 0 and operation failures exit 1
 (CLI usage errors exit 2). `add` and `update` return a mutation receipt with `before`, `result`,
@@ -120,6 +125,15 @@ Every successful call returns `{"ok": true, "data": ...}` and every failure retu
 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) remains as a compatibility redirect for older links.
 
 Project architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Responsibility Boundaries
+
+Backlog CLI owns portable task intent, item CRUD, declared and derived status, dependencies, revisions, and the
+derived index. Compatibility adapters preserve older layouts but are not a new integration surface.
+
+Workspace Control owns local project routing, Catalog descriptors, and development services. Sigil owns execution
+workflow concerns such as runs, claims, checkpoints, submissions, review, worktrees, scheduling, and deciding whether
+work is complete. Neither host responsibility is persisted in `backlog/Store@1`.
 
 ## Development
 
