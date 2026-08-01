@@ -41,6 +41,8 @@ def _find_backlog_dir(start: Path | None = None) -> Path | None:
 def get_backlog_dir(project_path: Path | None = None, create: bool = False) -> Path:
     """Return the backlog directory. Prefer an existing direct backlog for Project Ops targets."""
     if project_path is not None:
+        if project_path.name == "backlog":
+            raise ValueError("--target must be the backlog store parent, not its backlog/ child")
         direct_backlog = project_path / "backlog"
         base = direct_backlog if direct_backlog.is_dir() else project_path / "docs" / "backlog"
     else:

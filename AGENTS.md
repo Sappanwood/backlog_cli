@@ -20,11 +20,12 @@
 | [skills/backlog/SKILL.md](skills/backlog/SKILL.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
 | [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 旧链接兼容入口 | skill 权威入口路径变化后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
-| `/home/ling/workspace/project-ops/backlog-cli/backlog/` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
-| `/home/ling/workspace/project-ops/backlog-cli/plans/` | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 新增或更新执行计划时 |
-| `/home/ling/workspace/project-ops/backlog-cli/research/` | 查阅项目级调研证据时 | 完成项目级调研时 |
-| `backlog --target /home/ling/workspace/project-ops/backlog-cli list --status todo` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后自动 `update --fixed` 标记 |
-| `backlog --target /home/ling/workspace/project-ops/backlog-cli stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
+| Catalog resolved `artifacts.adr.root` | 查看产品定位、架构边界和候选方案取舍时 | 新增、替代或废弃架构决策时 |
+| Project `dirname(artifacts.backlog.root)` 或 workspace `sources.workspace_artifacts.root` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
+| Catalog resolved `artifacts.plans.root` | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 新增或更新执行计划时 |
+| Catalog resolved `artifacts.research.root` | 查阅项目级调研证据时 | 完成项目级调研时 |
+| `backlog --target <project descriptor parent or workspace source root> list --status todo` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后自动 `update --fixed` 标记 |
+| `backlog --target <project descriptor parent or workspace source root> stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
 
 ## 项目速览
 
@@ -47,8 +48,8 @@ uv run pytest                                            # 测试
 uv run ruff check .                                      # Lint
 uv run pyright                                           # 类型检查
 
-# 手动测试（以当前项目自身为靶场）
-uv run backlog --target /home/ling/workspace/project-ops/backlog-cli list --status todo
-uv run backlog --target /home/ling/workspace/project-ops/backlog-cli add -T "测试" -c testing --priority P3
-uv run backlog --target /home/ling/workspace/project-ops/backlog-cli stats
+# 手动测试（先通过 Catalog 得到 project descriptor parent 或 workspace source root）
+uv run backlog --target <Catalog-resolved adapter target> list --status todo
+uv run backlog --target <Catalog-resolved adapter target> add -T "测试" -c testing --priority P3
+uv run backlog --target <Catalog-resolved adapter target> stats
 ```

@@ -34,12 +34,11 @@ metadata:
 不要因为普通问答或只读解释自动查询 backlog；只有进入项目开发、计划、任务选择或 backlog
 CRUD 场景时才主动操作。
 
-## Project Ops 路径解析
+## Catalog descriptor 路径解析
 
-所有已注册项目的 backlog 操作前，按 `/home/ling/workspace/AGENTS.md` 的项目注册表规则读取
-`/home/ling/workspace/project-ops/projects.json`。将唯一匹配记录的 `ops` 记为 `<ops-path>`，
-将 `repo` 记为目标 Repo，并读取目标 Repo 的 `AGENTS.md`。无匹配或匹配不唯一时停止，不得
-回退到 Repo 内创建 `docs/backlog/`。
+所有已注册项目的 backlog 操作前，按 `/home/ling/workspace/AGENTS.md` 的 Catalog 路由规则运行
+`/home/ling/workspace/project-ops/bin/workspace project resolve <target> --catalog /home/ling/workspace/project-ops/catalog/workspace.json --json`。
+对 project scope，要求唯一的 `backlog/store@1` descriptor，记 `dirname(root)` 为 `<backlog-target>`，并读取 resolved Repo 的 `AGENTS.md`。对 workspace scope，要求 `workspace/artifacts@1` source descriptor 并确认其直接子目录 `backlog/` 是唯一 backlog root，记 source root 为 `<backlog-target>`。两种 scope 都不得从路径猜测或回退到 Repo 内创建 `docs/backlog/`。
 
 只有处理未注册的独立 Repo 时，才允许依赖 `backlog` 从当前工作目录向上查找
 `docs/backlog/`。
@@ -49,21 +48,21 @@ CRUD 场景时才主动操作。
 优先使用：
 
 ```bash
-backlog --target <ops-path> <子命令>
+backlog --target <backlog-target> <子命令>
 ```
 
-`--target` 必须指定注册表解析出的 `<ops-path>`。backlog-cli 会在其下管理 `backlog/`。
+`--target` 必须指定 project descriptor root 的 parent，或 workspace `workspace_artifacts.root` source root。backlog-cli 会在其下管理唯一的 `backlog/` store；不得把 `backlog/` child 自身作为 target。
 
-若 PATH 中的 `backlog` 入口不可用或模块环境损坏，从同一 registry 获取
-`id == "backlog-cli"` 的唯一记录，将其 `repo` 记为 `<backlog-cli-repo>`，再使用：
+若 PATH 中的 `backlog` 入口不可用或模块环境损坏，从同一 Catalog resolved context 获取
+`id == "backlog-cli"` 的唯一 project repo，将其记为 `<backlog-cli-repo>`，再使用：
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target <ops-path> <子命令>
+UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target <backlog-target> <子命令>
 ```
 
-`<backlog-cli-repo>` 必须来自 registry，不得使用历史固定路径。若 backlog fallback 也不可用，
-才回退为直接编辑 `<ops-path>/backlog/items/*.md`。回退后必须用等价方式同步
-`<ops-path>/backlog/INDEX.md`，并在回复中说明未能使用 CLI。
+`<backlog-cli-repo>` 必须来自 Catalog resolved context，不得使用历史固定路径。若 backlog fallback 也不可用，
+才回退为直接编辑 `<backlog-target>/backlog/items/*.md`。回退后必须用等价方式同步
+`<backlog-target>/backlog/INDEX.md`，并在回复中说明未能使用 CLI。
 
 ## 命令速查
 
@@ -159,13 +158,13 @@ Agent 可在以下场景主动操作 backlog，但必须满足对应前提。
 当用户要求选择下一项任务、查看项目待办、进入开发规划，或当前请求明显需要 backlog 上下文时：
 
 ```bash
-backlog --target <ops-path> list --status todo
+backlog --target <backlog-target> list --status todo
 ```
 
 或查看推荐：
 
 ```bash
-backlog --target <ops-path> next -n 5
+backlog --target <backlog-target> next -n 5
 ```
 
 ### 开始处理已知条目
@@ -173,8 +172,8 @@ backlog --target <ops-path> next -n 5
 只有当当前任务明确对应某个 backlog ID 时，才标记进行中：
 
 ```bash
-backlog --target <ops-path> update <ID> -s in_progress
-backlog --target <ops-path> index
+backlog --target <backlog-target> update <ID> -s in_progress
+backlog --target <backlog-target> index
 ```
 
 ### 完成已知条目
@@ -182,8 +181,8 @@ backlog --target <ops-path> index
 只有当当前任务明确对应某个 backlog ID，且代码、文档、测试验收已完成时，才标记完成：
 
 ```bash
-backlog --target <ops-path> update <ID> --fixed
-backlog --target <ops-path> index
+backlog --target <backlog-target> update <ID> --fixed
+backlog --target <backlog-target> index
 ```
 
 不要因为完成了一个临时用户请求而猜测性关闭 backlog 条目。
@@ -193,8 +192,8 @@ backlog --target <ops-path> index
 只有当 bug、技术债或后续任务已经被确认，且值得跨会话保留时才新增条目：
 
 ```bash
-backlog --target <ops-path> add -T "描述" -c <bug|refactor|perf|feature|ux|docs> --priority <P1|P2> -e <XS|S|M|L|XL> -i <high|medium|low> -b "一句话说明背景、目标或验收标准"
-backlog --target <ops-path> index
+backlog --target <backlog-target> add -T "描述" -c <bug|refactor|perf|feature|ux|docs> --priority <P1|P2> -e <XS|S|M|L|XL> -i <high|medium|low> -b "一句话说明背景、目标或验收标准"
+backlog --target <backlog-target> index
 ```
 
 该形式用于快速捕获。如果问题已经足够明确并准备交付执行，按
@@ -206,7 +205,7 @@ backlog --target <ops-path> index
 用户关注进度，或完成一组 backlog 操作后：
 
 ```bash
-backlog --target <ops-path> stats
+backlog --target <backlog-target> stats
 ```
 
 ## 数据模型
@@ -276,11 +275,11 @@ score = priority_weight * impact_weight * effort_weight
 
 ## 跨项目使用
 
-通过 `--target` 参数切换目标。已注册项目先按 Workspace `AGENTS.md` 的项目注册表规则取得
-记录，并将其中的 `ops` 作为 `<ops-path>`。不得拼接 Project Ops 路径或使用固定路径 fallback。
+通过 `--target` 参数切换目标。已注册项目先按 Workspace `AGENTS.md` 的 Catalog descriptor 规则得到
+`<backlog-target>`；project 使用 `backlog/store@1` parent，workspace 使用 `workspace/artifacts@1` source root。不得拼接旧 Project Ops 路径或使用固定路径 fallback。
 
 ```bash
-backlog --target <ops-path> stats --json
+backlog --target <backlog-target> stats --json
 ```
 
 操作前先 `git status --short` 检查目标项目工作区状态，避免覆盖用户正在编辑的内容。
@@ -289,27 +288,27 @@ backlog --target <ops-path> stats --json
 
 ```bash
 # 列出 todo
-backlog --target <ops-path> list --status todo
+backlog --target <backlog-target> list --status todo
 
 # 推荐下一批
-backlog --target <ops-path> next -n 5
+backlog --target <backlog-target> next -n 5
 
 # 查看条目
-backlog --target <ops-path> show <ID>
+backlog --target <backlog-target> show <ID>
 
 # 新增快速记录
-backlog --target <ops-path> add -T "标题" -c feature --priority P1 -e M -i high -b "一句话描述"
+backlog --target <backlog-target> add -T "标题" -c feature --priority P1 -e M -i high -b "一句话描述"
 
 # 新增可执行条目（正文包含 Intent 与 Acceptance Criteria）
-backlog --target <ops-path> add -T "标题" -c feature --priority P1 --body-file /tmp/body.md
+backlog --target <backlog-target> add -T "标题" -c feature --priority P1 --body-file /tmp/body.md
 
 # 更新字段
-backlog --target <ops-path> update <ID> --priority P2
+backlog --target <backlog-target> update <ID> --priority P2
 
 # 完成条目并重建索引
-backlog --target <ops-path> update <ID> --fixed
-backlog --target <ops-path> index
+backlog --target <backlog-target> update <ID> --fixed
+backlog --target <backlog-target> index
 
 # 获取推荐列表 JSON
-backlog --target <ops-path> next -n 3 --json
+backlog --target <backlog-target> next -n 3 --json
 ```

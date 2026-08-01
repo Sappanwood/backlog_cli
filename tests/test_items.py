@@ -100,6 +100,13 @@ class TestGetBacklogDir:
     def test_defaults_to_docs_backlog_for_existing_projects(self, tmp_path):
         assert get_backlog_dir(tmp_path) == tmp_path / "docs" / "backlog"
 
+    def test_rejects_backlog_child_as_target(self, tmp_path):
+        child = tmp_path / "backlog"
+        child.mkdir()
+
+        with pytest.raises(ValueError, match="backlog store parent"):
+            get_backlog_dir(child, create=True)
+
     def test_finds_from_subdir(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
         subdir = tmp_path / "src" / "deep"
