@@ -45,19 +45,22 @@ CRUD 场景时才主动操作。
 
 ## 调用范式
 
-优先使用：
+Agent 的权威入口是 exact store：
 
 ```bash
-backlog --target <backlog-target> <子命令>
+backlog --store <absolute-backlog-root> <子命令>
 ```
 
-`--target` 必须指定 project descriptor root 的 parent，或 workspace `workspace_artifacts.root` source root。backlog-cli 会在其下管理唯一的 `backlog/` store；不得把 `backlog/` child 自身作为 target。
+`--store` 必须是绝对的准确 `backlog/` root，且已有有效 `backlog.json`、`items/` 和 `INDEX.md`；它不执行
+parent、child、Repo、Project Ops 或 CWD discovery，且不能与 `--target` 并用。`--target` 与 CWD discovery
+只保留为既有调用的 compatibility adapter：`--target` 必须指定 project descriptor root 的 parent，或
+workspace `workspace_artifacts.root` source root。backlog-cli 在 adapter 层解析唯一 `backlog/` store 后进入相同 core。
 
 若 PATH 中的 `backlog` 入口不可用或模块环境损坏，从同一 Catalog resolved context 获取
 `id == "backlog-cli"` 的唯一 project repo，将其记为 `<backlog-cli-repo>`，再使用：
 
 ```bash
-UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --target <backlog-target> <子命令>
+UV_CACHE_DIR=/tmp/uv-cache uv run --project <backlog-cli-repo> backlog --store <absolute-backlog-root> <子命令>
 ```
 
 `<backlog-cli-repo>` 必须来自 Catalog resolved context，不得使用历史固定路径。若 backlog fallback 也不可用，
@@ -211,8 +214,8 @@ backlog --target <backlog-target> stats
 ## 数据模型
 
 ```yaml
-id: "ZHI-001"          # 自动生成：项目目录名前3字母大写 + 三位序号
-project: "zhijian"     # 项目标识（自动取自目标目录名）
+id: "ZHI-001"          # exact store 自动生成：manifest id_prefix + 三位序号
+project: "zhijian"     # exact store 项目标识（manifest project_id）
 title: "标题"
 category: feature      # bug | a11y | ux | i18n | testing | feature | refactor | perf | docs | architecture | security | research | ops
 priority: P1           # P0(最高/影响发布) > P1(严重) > P2(中等) > P3(低)
@@ -254,10 +257,10 @@ score = priority_weight * impact_weight * effort_weight
 
 ## 操作约定
 
-- 新增条目时必须提供 `-T`（标题）、`-c`（分类）、`--priority`（优先级）。项目名自动从目标目录名推导。
+- 新增条目时必须提供 `-T`（标题）、`-c`（分类）、`--priority`（优先级）。exact store 从 manifest 取得项目名和 ID prefix；legacy adapter 仅为兼容而保留历史推导。
 - 快速捕获 seed、提醒或调查线索时可使用 `-b "描述"`；准备交付执行的 item 按
   `Backlog Item Body Contract` 使用多行正文。
-- ID 自动生成：格式为 `<目录名前3字母大写>-<三位序号>`，如 `zhijian/` 目录生成 `ZHI-001`。
+- ID 自动生成：exact store 使用 manifest `id_prefix`，格式为 `<PREFIX>-<三位序号>`，如 `ZHI-001`。
 - `update` 只修改明确传入的字段，其余保持不变。
 - `related_docs` 保存与条目相关的 Repo 文档或 Project Ops artifact 逻辑引用。`--related-docs` 传入逗号分隔列表并替换整个列表。CLI 只做 trim/去空，不检查路径是否存在。
 - `--fixed` 是快捷方式，等于 `-s done` + 自动填写 `fixed_at`。

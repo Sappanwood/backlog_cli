@@ -94,13 +94,27 @@ Markdown 正文（body）
 2. 在 exact store 的 `.lock` 上取得排他锁后分配 ID。
 3. 扫描该前缀在 exact `items/` 目录中的最大序号，返回 `<前缀>-<最大序号+1>`（三位补零，如 `BAC-023`）。
 4. 创建和 patch 均验证 item 的 `project` 和 ID prefix 与 manifest 一致；验证失败、依赖失败和 revision conflict 不会写入 item 或 index。
+5. mutation 取得 store lock 后重新载入同一 exact root 的 manifest；若 legacy adapter 先前构造的 context 已被不同 identity 的
+   manifest 取代，mutation 会在任何写入前 fail closed。
 
-### Legacy 项目发现流程
+### CLI Store 入口与 Legacy 项目发现流程
+
+`backlog --store <absolute-exact-root> <command>` 是权威 CLI entrypoint。CLI callback 通过
+`load_store()` 严格载入 manifest；它不会从 parent、child、Repo、Project Ops 或 CWD 推导 store。
+`--store` 不能与 `--target` 同时使用，invalid store 或 option combination 在 JSON 调用中返回稳定的
+`STORE_INVALID` 或 `INVALID_INPUT` error envelope 和非零退出码。
 
 旧 `--target` / CWD 布局解析是临时 outer adapter：显式 target 优先 `<target>/backlog/`，否则使用
-`<target>/docs/backlog/`；未传 target 时才向上发现 `docs/backlog/`。解析结束后 adapter 构造
-`StoreContext` 再调用 core。`items.py` 的 `add_item`、`update_item`、`next_id`、`generate_index` 与
+`<target>/docs/backlog/`；未传 target 时才向上发现 `docs/backlog/`。若 legacy root 已有 manifest，adapter
+严格载入它；否则仅在 adapter 层以既有布局和持久 item identity 构造 temporary context。两条入口均调用同一
+exact core。`items.py` 的 `add_item`、`update_item`、`next_id`、`generate_index` 与
 `check_dependencies` 不接受 project path，也不执行 discovery。
+
+管理员可使用 `provision-store --project-id <id> --id-prefix <prefix>` 为由 `--target`/CWD 解析的 legacy
+root 创建 manifest。该路径要求 root、`items/`、`INDEX.md` 均为 contained regular entries，验证每个 item 的
+物理 ID、`project` 与 prefix，并使用 no-clobber publish 创建 `backlog.json`；不猜测 identity，也不覆盖
+已有 manifest。最终 manifest 检查、完整 item 验证、publish 与 post-publish load 都在与 normal mutation
+共享的 store lock 内执行。
 
 ### 推荐排序
 
@@ -161,8 +175,8 @@ check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> 
 
 `list_items` 和 `show_item` 是 portable core read API：调用者必须先通过
 `store.load_store()` 获得准确的 `StoreContext`，它们不会检查 CWD、项目路径或 legacy layout，也不会创建任何文件。
-在 BAC-032 完成前，CLI 继续通过明确命名的 legacy adapter 保持既有
-`<target>/backlog/`、`<target>/docs/backlog/` 和 CWD discovery 行为；该 adapter 不属于 portable core。
+CLI 通过明确命名的 legacy adapter 保持既有 `<target>/backlog/`、`<target>/docs/backlog/` 和 CWD
+discovery 行为；该 adapter 不属于 portable core。
 
 ## 关键设计决策
 
@@ -170,4 +184,4 @@ check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> 
 |------|------|------|------|
 | 存储方式 | 每个条目一个 .md 文件 | 单 JSON/YAML 文件 | 人类可读、git diff 友好、并发写入安全 |
 | ID 方案 | 项目前3字母+序号 | UUID | 简短、人类可读、便于对话引用 |
-| 全局 `--dir` | 单回调设置全局变量 | 每个子命令传参 | 简化子命令签名，单次调用只操作一个项目 |
+| 全局 `--store` / `--target` | 单回调设置一次 entrypoint context | 每个子命令重复解析 | 简化子命令签名，单次调用只操作一个 store |

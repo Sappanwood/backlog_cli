@@ -27,23 +27,22 @@ In a checked-out development environment, the local virtualenv command also work
 
 ## Basic Usage
 
-All commands operate on a target project directory. If `docs/backlog/` does not exist, it is created under the
-directory passed to `--dir`.
+The authoritative interface accepts an exact, absolute portable store root. It must already contain a valid
+`backlog.json`, `items/`, and `INDEX.md`; read commands do not create files or discover parent/child directories.
 
 ```bash
-uv run backlog --dir ~/my-project list --status todo
-uv run backlog --dir ~/my-project next -n 5 --json
-uv run backlog --dir ~/my-project show PRO-001
-uv run backlog --dir ~/my-project update PRO-001 --fixed
-uv run backlog --dir ~/my-project stats
+uv run backlog --store /absolute/path/to/backlog list --status todo
+uv run backlog --store /absolute/path/to/backlog next -n 5 --json
+uv run backlog --store /absolute/path/to/backlog show PRO-001
+uv run backlog --store /absolute/path/to/backlog update PRO-001 --fixed
+uv run backlog --store /absolute/path/to/backlog stats
 ```
 
 Create a new item:
 
 ```bash
-uv run backlog --dir ~/my-project add \
-  -p my-project \
-  -t "Add login audit logging" \
+uv run backlog --store /absolute/path/to/backlog add \
+  -T "Add login audit logging" \
   -c feature \
   --priority P1 \
   -e S \
@@ -54,20 +53,29 @@ uv run backlog --dir ~/my-project add \
 For multiline Markdown bodies, prefer `--body-file` or `--stdin`:
 
 ```bash
-uv run backlog --dir ~/my-project add \
-  -p my-project \
-  -t "Document deployment rollback" \
+uv run backlog --store /absolute/path/to/backlog add \
+  -T "Document deployment rollback" \
   -c docs \
   --priority P2 \
   --body-file /tmp/body.md
+```
+
+`--target` and CWD discovery remain compatibility adapters for existing `backlog/` and `docs/backlog/` layouts.
+They cannot be combined with `--store`. To adopt an existing legacy store, first ensure it has regular `items/` and
+`INDEX.md` entries, then provide its identity explicitly; the command rejects existing manifests and item identity
+conflicts without overwriting them:
+
+```bash
+uv run backlog --target /path/to/legacy-project provision-store \
+  --project-id my-project --id-prefix PRO
 ```
 
 ## Data Model
 
 Each item has fields such as:
 
-- `id`: generated from the project name prefix, for example `BAC-001`
-- `project`: project identifier
+- `id`: exact stores generate it from manifest `id_prefix`, for example `BAC-001`; legacy derivation is compatibility-only
+- `project`: exact stores take this identifier from manifest `project_id`
 - `title`: short task title
 - `category`: `bug`, `feature`, `docs`, `testing`, `ops`, and other supported categories
 - `priority`: `P0`, `P1`, `P2`, `P3`

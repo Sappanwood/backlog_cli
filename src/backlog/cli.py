@@ -12,26 +12,15 @@ from rich.console import Console
 from rich.table import Table
 
 from .items import (
-    INDEX_FILENAME,
     BacklogItemParseError,
-    get_backlog_dir,
-    get_item_filepath,
+    _legacy_store_context,
+    add_item,
+    generate_index,
     get_warnings,
-)
-from .items import (
-    add_legacy_item as add_item,
-)
-from .items import (
-    generate_legacy_index as generate_index,
-)
-from .items import (
-    list_legacy_items as list_items,
-)
-from .items import (
-    show_legacy_item as show_item,
-)
-from .items import (
-    update_legacy_item as update_item,
+    list_items,
+    provision_legacy_store,
+    show_item,
+    update_item,
 )
 from .models import (
     BacklogItem,
@@ -41,11 +30,25 @@ from .models import (
     Priority,
     Status,
 )
+from .store import StoreContext, StoreLoadError, load_store
 
 app = typer.Typer(help="Unified backlog manager")
 console = Console()
 stderr_console = Console(stderr=True)
 _target_path: Path | None = None
+_store_context: StoreContext | None = None
+
+
+class _CliInputError(click.ClickException):
+    """A stable CLI input error that can be rendered as JSON by run_cli."""
+
+    error_code = "INVALID_INPUT"
+
+
+class _CliStoreError(_CliInputError):
+    """A stable CLI store-validation error."""
+
+    error_code = "STORE_INVALID"
 
 
 def _print_json_success(data: dict | list, warnings: list[str] | None = None) -> None:
@@ -74,21 +77,39 @@ def _print_json_error(code: str, message: str, details: dict | None = None) -> N
 
 @app.callback()
 def main(
+    store: Annotated[
+        Path | None,
+        typer.Option("--store", help="Exact absolute portable Backlog Store root"),
+    ] = None,
     target: Annotated[
         Path | None,
         typer.Option("--target", help="Project root directory (default: auto-detect from cwd)"),
     ] = None,
 ):
-    global _target_path
+    global _store_context, _target_path
+    if store is not None and target is not None:
+        raise _CliInputError("--store cannot be combined with --target or CWD discovery.")
     _target_path = target.resolve() if target else None
+    _store_context = None
+    if store is not None:
+        try:
+            _store_context = load_store(store)
+        except StoreLoadError as error:
+            raise _CliStoreError(str(error)) from error
 
 
-def _resolve_target_path() -> Path:
-    return _target_path or Path.cwd()
-
-
-def _resolve_project_name() -> str:
-    return _resolve_target_path().resolve().name
+def _resolve_store_context(*, create: bool = False, project_name: str | None = None) -> StoreContext:
+    """Enter the exact core through either the authority or legacy outer adapter."""
+    if _store_context is not None:
+        return _store_context
+    try:
+        return _legacy_store_context(
+            _target_path,
+            project_name,
+            create=create,
+        )
+    except StoreLoadError as error:
+        raise _CliStoreError(str(error)) from error
 
 
 def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
@@ -215,7 +236,7 @@ def list_cmd(
             allowed_priorities.append(Priority[p_strip])
 
     try:
-        items = list_items(_resolve_target_path())
+        items = list_items(_resolve_store_context())
     except BacklogItemParseError as e:
         if format == "json":
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -252,7 +273,8 @@ def show(
 ):
     """Show full details of a backlog item."""
     try:
-        item = show_item(item_id, _resolve_target_path())
+        store = _resolve_store_context()
+        item = show_item(item_id, store)
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -291,7 +313,7 @@ def show(
     if item.related_docs:
         console.print(f"Related docs: {', '.join(item.related_docs)}")
     if item.depends_on:
-        all_items = {i.id: i for i in list_items(_resolve_target_path())}
+        all_items = {i.id: i for i in list_items(store)}
         dep_statuses = []
         has_blocking = False
         for dep_id in item.depends_on:
@@ -344,12 +366,12 @@ def add(
     dep_list = _parse_csv_list(depends_on)
     related_doc_list = _parse_csv_list(related_docs)
     body_content = _resolve_body(body, body_file, stdin) or ""
-    project_name = _resolve_project_name()
+    store = _resolve_store_context(create=True)
 
     try:
         item = BacklogItem(
             id="AUTO",
-            project=project_name,
+            project=store.manifest.project_id,
             title=title,
             category=category,
             priority=priority,
@@ -361,7 +383,7 @@ def add(
             related_docs=related_doc_list,
             body=body_content,
         )
-        filepath = add_item(item, _resolve_target_path())
+        filepath = add_item(item, store)
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -464,7 +486,12 @@ def update(
         raise typer.Exit(1)
 
     try:
-        result = update_item(item_id, updates, _resolve_target_path(), expected_revision=expected_revision)
+        store = _resolve_store_context()
+        if _store_context is None:
+            current = show_item(item_id, store)
+            if current is not None:
+                store = _resolve_store_context(project_name=current.project)
+        result = update_item(item_id, updates, store, expected_revision=expected_revision)
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -502,7 +529,7 @@ def stats(
 ):
     """Show backlog statistics."""
     try:
-        items = list_items(_resolve_target_path())
+        items = list_items(_resolve_store_context())
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -593,7 +620,7 @@ def next_cmd(
         raise typer.BadParameter("Limit must be a non-negative integer.")
 
     try:
-        items = list_items(_resolve_target_path())
+        items = list_items(_resolve_store_context())
     except BacklogItemParseError as e:
         if json_output:
             _print_json_error("PARSING_ERROR", str(e), {"filepath": str(e.filepath)})
@@ -635,9 +662,9 @@ def index(
 ):
     """Generate docs/backlog/INDEX.md overview."""
     try:
-        content = generate_index(_resolve_target_path())
-        backlog_dir = get_backlog_dir(_resolve_target_path(), create=True)
-        index_path = backlog_dir / INDEX_FILENAME
+        store = _resolve_store_context(create=True)
+        content = generate_index(store)
+        index_path = store.index_path
         index_path.write_text(content)
     except BacklogItemParseError as e:
         if json_output:
@@ -665,8 +692,14 @@ def edit(
 ):
     """Open a backlog item in $EDITOR, or replace body via --stdin."""
     try:
-        filepath = get_item_filepath(item_id, _resolve_target_path(), create=False)
-    except ValueError as e:
+        store = _resolve_store_context()
+        current = show_item(item_id, store)
+        if current is None:
+            raise ValueError(f"Item '{item_id}' not found.")
+        if _store_context is None:
+            store = _resolve_store_context(project_name=current.project)
+        filepath = store.items_path / f"{item_id}.md"
+    except (StoreLoadError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
     if not filepath.exists():
@@ -676,7 +709,7 @@ def edit(
     if stdin:
         new_body = sys.stdin.read()
         try:
-            result = update_item(item_id, {"body": new_body}, _resolve_target_path())
+            result = update_item(item_id, {"body": new_body}, store)
         except BacklogItemParseError as e:
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1) from e
@@ -698,10 +731,49 @@ def edit(
     os.system(f"{editor} {filepath}")
 
 
+@app.command(name="provision-store")
+def provision_store(
+    project_id: str = typer.Option(..., "--project-id", help="Manifest project_id to validate and persist"),
+    id_prefix: str = typer.Option(..., "--id-prefix", help="Manifest ID prefix to validate and persist"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Create a manifest for one validated legacy --target/CWD store."""
+    if _store_context is not None:
+        message = "provision-store requires a legacy --target or CWD store without --store."
+        if json_output:
+            _print_json_error("INVALID_INPUT", message)
+        else:
+            console.print(f"[red]Error: {message}[/red]")
+        raise typer.Exit(1)
+    try:
+        store = provision_legacy_store(
+            _target_path,
+            project_id=project_id,
+            id_prefix=id_prefix,
+        )
+    except (BacklogItemParseError, ValueError) as error:
+        if json_output:
+            _print_json_error("INVALID_INPUT", str(error))
+        else:
+            console.print(f"[red]Error: {error}[/red]")
+        raise typer.Exit(1) from error
+
+    data = {
+        "store": str(store.root),
+        "project_id": store.manifest.project_id,
+        "id_prefix": store.manifest.id_prefix,
+    }
+    if json_output:
+        _print_json_success(data)
+        return
+    console.print(f"[green]Provisioned[/green] {store.manifest_path}")
+
+
 def run_cli():
     is_json = "--json" in sys.argv or any(
-        sys.argv[i] == "--format" and i + 1 < len(sys.argv) and sys.argv[i + 1] == "json"
-        for i in range(len(sys.argv))
+        argument == "--format=json"
+        or (argument == "--format" and index + 1 < len(sys.argv) and sys.argv[index + 1] == "json")
+        for index, argument in enumerate(sys.argv)
     )
     if is_json:
         try:
@@ -710,7 +782,8 @@ def run_cli():
             if isinstance(ret_code, int) and ret_code != 0:
                 sys.exit(ret_code)
         except click.exceptions.ClickException as e:
-            _print_json_error("INVALID_INPUT", e.format_message())
+            code = e.error_code if isinstance(e, _CliInputError) else "INVALID_INPUT"
+            _print_json_error(code, e.format_message())
             sys.exit(e.exit_code)
         except click.exceptions.Abort:
             _print_json_error("ABORTED", "Operation aborted.")
