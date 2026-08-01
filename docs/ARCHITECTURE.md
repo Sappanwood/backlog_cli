@@ -22,6 +22,40 @@ flowchart TD
 | 序列化 | python-frontmatter | 1.1+ | YAML frontmatter + Markdown body 读写 |
 | 构建 | hatchling | PEP 621 | 轻量，零配置 |
 
+## Portable Backlog Store
+
+`backlog/Store@1` 以一个准确的绝对 store root 为 authority，不依赖 Workspace Control、Project Ops、
+固定用户路径或目录名推导。其静态结构为：
+
+```text
+backlog/
+├── backlog.json
+├── items/
+├── INDEX.md
+└── .lock                 # 可选；仅在写入期间创建
+```
+
+`backlog.json` 是严格 schema，且只能包含以下字段：
+
+```json
+{
+  "schema": "backlog/Store@1",
+  "project_id": "backlog-cli",
+  "id_prefix": "BAC"
+}
+```
+
+- `schema` 必须精确为 `backlog/Store@1`。
+- `project_id` 必须以字母或数字开始，之后只能使用字母、数字、`-`、`_`。
+- `id_prefix` 必须以大写字母开始，之后只能使用大写字母、数字、`_`。
+- `backlog.json`、`items/` 和 `INDEX.md` 均为必需的直接 entry，分别必须是普通文件、目录和普通文件；
+  已存在的 `.lock` 也必须是普通文件。loader 不创建任何 entry。
+
+`store.load_store(root)` 返回不可变的 `StoreContext`，统一持有 canonical root、manifest、manifest path、
+items path、index path 和 lock path。它仅接受绝对 root，并拒绝缺失、非规则 entry、静态 symlink 或
+解析后逃逸 root 的路径。当前安全边界是受信任本机用户和受信任 store root：防御静态 containment escape
+并支持正常并发；不承诺抵抗同一用户在校验后替换 ancestor 的攻击。
+
 ## 核心流程
 
 ### 数据存储
