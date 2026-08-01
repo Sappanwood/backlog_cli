@@ -1,14 +1,27 @@
 """Tests for the portable Backlog Store contract."""
 
+import concurrent.futures
 import json
+import os
 import shutil
+import stat
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from backlog.items import BacklogItemParseError, list_items, show_item
-from backlog.models import Status
+from backlog.items import (
+    BacklogItemParseError,
+    add_item,
+    generate_index,
+    list_items,
+    show_item,
+    update_item,
+)
+from backlog.models import BacklogItem, Category, Priority, Status
 from backlog.store import StoreLoadError, StoreManifest, load_store
 
 
@@ -29,13 +42,25 @@ def _make_store(tmp_path: Path) -> Path:
     return root
 
 
-def _store_snapshot(root: Path) -> list[tuple[str, int, bytes | None]]:
-    """Capture direct store entries to prove failed loading did not mutate them."""
-    entries = []
-    for entry in sorted(root.iterdir()):
-        mode = entry.lstat().st_mode
-        content = entry.read_bytes() if entry.is_file() and not entry.is_symlink() else None
-        entries.append((entry.name, mode, content))
+def _store_snapshot(root: Path) -> list[tuple[str, int, bytes | str | None]]:
+    """Recursively capture store entry types and regular-file bytes without following links."""
+    entries: list[tuple[str, int, bytes | str | None]] = []
+
+    def capture(directory: Path) -> None:
+        for entry in sorted(directory.iterdir()):
+            mode = entry.lstat().st_mode
+            relative = str(entry.relative_to(root))
+            if stat.S_ISREG(mode):
+                content: bytes | str | None = entry.read_bytes()
+            elif stat.S_ISLNK(mode):
+                content = os.readlink(entry)
+            else:
+                content = None
+            entries.append((relative, mode, content))
+            if stat.S_ISDIR(mode):
+                capture(entry)
+
+    capture(root)
     return entries
 
 
@@ -292,3 +317,206 @@ class TestStoreContextReads:
             show_item("POR-001", context)
 
         assert _store_snapshot(root) == before
+
+
+class TestExactStoreMutations:
+    def _item(self, item_id: str = "AUTO", **overrides: object) -> BacklogItem:
+        values = {
+            "id": item_id,
+            "project": "portable-project",
+            "title": "Portable mutation",
+            "category": Category.FEATURE,
+            "priority": Priority.P1,
+        }
+        values.update(overrides)
+        return BacklogItem.model_validate(values)
+
+    def test_add_allocates_manifest_prefix_and_rebuilds_index(self, tmp_path):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+
+        filepath = add_item(self._item(), store)
+
+        assert filepath == root / "items" / "POR-001.md"
+        created = show_item("POR-001", store)
+        assert created is not None
+        assert created.project == "portable-project"
+        assert "POR-001" in (root / "INDEX.md").read_text()
+
+    @pytest.mark.parametrize(
+        "item",
+        [
+            pytest.param(lambda self: self._item(project="another-project"), id="project-mismatch"),
+            pytest.param(lambda self: self._item("OTHER-001"), id="id-prefix-mismatch"),
+        ],
+    )
+    def test_add_rejects_identity_mismatch_without_mutating_store(self, tmp_path, item):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(ValueError, match="manifest"):
+            add_item(item(self), store)
+
+        assert _store_snapshot(root) == before
+
+    def test_update_rejects_item_identity_mismatch_without_mutating_store(self, tmp_path):
+        root = _make_store(tmp_path)
+        _write_item(root, "POR-001", project="another-project")
+        store = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(ValueError, match="manifest"):
+            update_item("POR-001", {"title": "Must not write"}, store)
+
+        assert _store_snapshot(root) == before
+
+    def test_update_rejects_project_patch_mismatch_without_mutating_store(self, tmp_path):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+        add_item(self._item(), store)
+        before = _store_snapshot(root)
+
+        with pytest.raises(ValueError, match="manifest"):
+            update_item("POR-001", {"project": "another-project"}, store)
+
+        assert _store_snapshot(root) == before
+
+    def test_failed_dependency_and_revision_conflict_preserve_item_and_index(self, tmp_path):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+        add_item(self._item(), store)
+        before = _store_snapshot(root)
+
+        with pytest.raises(ValueError, match="Dependency not found"):
+            update_item("POR-001", {"depends_on": ["POR-999"]}, store)
+        assert _store_snapshot(root) == before
+
+        with pytest.raises(ValueError, match="Revision mismatch"):
+            update_item("POR-001", {"title": "Must not write"}, store, expected_revision="wrong")
+        assert _store_snapshot(root) == before
+
+    def test_add_never_clobbers_existing_item(self, tmp_path):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+        add_item(self._item("POR-001"), store)
+        before = _store_snapshot(root)
+
+        with pytest.raises(FileExistsError, match="already exists"):
+            add_item(self._item("POR-001", title="Replacement"), store)
+
+        assert _store_snapshot(root) == before
+
+    def test_concurrent_auto_ids_are_unique(self, tmp_path):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            created = list(executor.map(lambda _: add_item(self._item(), store), range(2)))
+
+        assert {path.name for path in created} == {"POR-001.md", "POR-002.md"}
+        assert [item.id for item in list_items(store)] == ["POR-001", "POR-002"]
+
+    def test_generate_index_uses_exact_store_context(self, tmp_path):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+        add_item(self._item(), store)
+
+        assert "POR-001" in generate_index(store)
+
+    @pytest.mark.parametrize("temp_name", ["POR-001.tmp", "INDEX.tmp"])
+    @pytest.mark.parametrize("target_kind", ["external", "dangling"])
+    def test_temp_symlinks_fail_without_mutating_the_store(self, tmp_path, temp_name, target_kind):
+        root = _make_store(tmp_path)
+        store = load_store(root)
+        (root / ".lock").write_text("")
+        temp_path = root / "items" / temp_name if temp_name.startswith("POR") else root / temp_name
+        outside = tmp_path / "outside.tmp"
+        if target_kind == "external":
+            outside.write_text("outside")
+        temp_path.symlink_to(outside)
+        before = _store_snapshot(root)
+        outside_before = outside.read_bytes() if outside.exists() else None
+
+        with pytest.raises(ValueError, match="(?i)temporary publish path"):
+            add_item(self._item("POR-001"), store)
+
+        assert _store_snapshot(root) == before
+        assert (outside.read_bytes() if outside.exists() else None) == outside_before
+
+    def test_persisted_auto_id_fails_without_mutating_store(self, tmp_path):
+        root = _make_store(tmp_path)
+        _write_item(root, "POR-001", id="AUTO")
+        store = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(ValueError, match="AUTO"):
+            update_item("POR-001", {"title": "Must not write"}, store)
+
+        assert _store_snapshot(root) == before
+
+    def test_filename_frontmatter_id_mismatch_fails_without_mutating_store(self, tmp_path):
+        root = _make_store(tmp_path)
+        _write_item(root, "POR-001", id="POR-002")
+        store = load_store(root)
+        before = _store_snapshot(root)
+
+        with pytest.raises(ValueError, match="physical item ID"):
+            update_item("POR-001", {"title": "Must not write"}, store)
+
+        assert _store_snapshot(root) == before
+
+    def test_independent_process_auto_adds_are_unique(self, tmp_path):
+        root = _make_store(tmp_path)
+        gate = tmp_path / "gate"
+        ready_paths = [tmp_path / "ready-1", tmp_path / "ready-2"]
+        child_code = """
+import os
+import time
+from pathlib import Path
+from backlog.items import add_item
+from backlog.models import BacklogItem, Category, Priority
+from backlog.store import load_store
+
+Path(os.environ[\"READY\"]).write_text(\"ready\")
+gate = Path(os.environ[\"GATE\"])
+while not gate.exists():
+    time.sleep(0.01)
+store = load_store(Path(os.environ[\"STORE\"]))
+item = BacklogItem(
+    id=\"AUTO\", project=\"portable-project\", title=\"Concurrent\",
+    category=Category.FEATURE, priority=Priority.P1,
+)
+print(add_item(item, store).name)
+"""
+        processes = []
+        try:
+            for ready_path in ready_paths:
+                environment = os.environ | {
+                    "STORE": str(root),
+                    "GATE": str(gate),
+                    "READY": str(ready_path),
+                }
+                processes.append(
+                    subprocess.Popen(
+                        [sys.executable, "-c", child_code],
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=environment,
+                    )
+                )
+            deadline = time.monotonic() + 5
+            while not all(path.exists() for path in ready_paths):
+                assert time.monotonic() < deadline, "child processes did not reach the add barrier"
+                time.sleep(0.01)
+            gate.write_text("go")
+            results = [process.communicate(timeout=5) for process in processes]
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.kill()
+
+        assert [stderr for _, stderr in results] == ["", ""]
+        assert {stdout.strip() for stdout, _ in results} == {"POR-001.md", "POR-002.md"}
+        assert [item.id for item in list_items(load_store(root))] == ["POR-001", "POR-002"]

@@ -6,9 +6,11 @@
 
 ```mermaid
 flowchart TD
-    CLI[cli.py - Typer CLI] --> Items[items.py - CRUD & I/O]
+    CLI[cli.py - Typer CLI] --> Legacy[legacy adapter - temporary target/CWD compatibility]
+    Legacy --> Items[items.py - exact StoreContext CRUD & I/O]
     Items --> Models[models.py - Data Models]
-    Items --> FS[(backlog/items/*.md or docs/backlog/items/*.md)]
+    Items --> Store[store.py - StoreManifest and StoreContext]
+    Store --> FS[(exact backlog/items/*.md)]
     CLI --> Rich[Rich Console/Tables]
 ```
 
@@ -61,8 +63,8 @@ items path、index path 和 lock path。它仅接受绝对 root，并拒绝缺�
 ### 数据存储
 
 ```
-<target>/backlog/              # Project Ops target，存在时优先
-<target>/docs/backlog/         # Repo target 默认路径
+<exact-store>/
+├── backlog.json
 ├── INDEX.md              # generate_index() 自动生成
 └── items/
     ├── ZHI-001.md         # 每项一个文件
@@ -88,15 +90,17 @@ Markdown 正文（body）
 
 ### ID 生成流程
 
-1. 默认取注册表 `projects.json` 里该项目的 `backlog_prefix`；如果未配置或为空，取 `project` 值前 3 个字母大写（如 `zhijian` → `ZHI`）。
-2. 在并发文件锁 `_lock_backlog` 保护下执行 ID 分配。
-3. **前缀智能兼容 fallback**：扫描当前项目下所有已有的条目 ID。若有且仅有一个前缀存在（如 `BAC`），即使注册表已被更新为其他前缀（如 `BCK`），也将自动沿用该已有前缀，以保证项目内 ID 的连续性。
-4. 扫描该前缀在 `items/` 目录中的最大序号，返回 `<前缀>-<最大序号+1>`（三位补零，如 `BAC-023`）。
+1. Core 只从 `StoreContext.manifest.id_prefix` 取得前缀。
+2. 在 exact store 的 `.lock` 上取得排他锁后分配 ID。
+3. 扫描该前缀在 exact `items/` 目录中的最大序号，返回 `<前缀>-<最大序号+1>`（三位补零，如 `BAC-023`）。
+4. 创建和 patch 均验证 item 的 `project` 和 ID prefix 与 manifest 一致；验证失败、依赖失败和 revision conflict 不会写入 item 或 index。
 
-### 项目发现流程
+### Legacy 项目发现流程
 
-- **显式传入 `project_path`（如指定 `--target` 参数）**：若 `project_path / backlog /` 已存在则优先使用；否则定位到 `project_path / docs / backlog /`。不会向上寻找。
-- **未传入 `project_path`**：调用 `_find_backlog_dir(start)` 从当前工作目录（CWD）向上逐级查找 `docs/backlog/`，找到即返回；若查找到根目录依然没有，则在当前工作目录下创建 `docs/backlog/`。
+旧 `--target` / CWD 布局解析是临时 outer adapter：显式 target 优先 `<target>/backlog/`，否则使用
+`<target>/docs/backlog/`；未传 target 时才向上发现 `docs/backlog/`。解析结束后 adapter 构造
+`StoreContext` 再调用 core。`items.py` 的 `add_item`、`update_item`、`next_id`、`generate_index` 与
+`check_dependencies` 不接受 project path，也不执行 discovery。
 
 ### 推荐排序
 
@@ -141,19 +145,23 @@ class BacklogItem(BaseModel):
 list_items(store: StoreContext) -> list[BacklogItem]
 show_item(item_id: str, store: StoreContext) -> BacklogItem | None
 
-# Temporary legacy adapter for the existing CLI and mutation APIs.
+# Temporary legacy adapter for existing CLI compatibility only.
 list_legacy_items(project_path: Path | None) -> list[BacklogItem]
 show_legacy_item(item_id: str, project_path: Path | None) -> BacklogItem | None
+add_legacy_item(item: BacklogItem, project_path: Path | None) -> Path
+update_legacy_item(item_id: str, updates: dict, project_path: Path | None, expected_revision: str | None) -> BacklogItem | None
 
-add_item(item: BacklogItem, project_path: Path | None) -> Path
-update_item(item_id: str, updates: dict, project_path: Path | None, expected_revision: str | None) -> BacklogItem | None
-next_id(project_name: str, project_path: Path | None) -> str
-generate_index(project_path: Path | None, project: str | None) -> str
+# Exact portable core API.
+add_item(item: BacklogItem, store: StoreContext) -> Path
+update_item(item_id: str, updates: dict, store: StoreContext, expected_revision: str | None) -> BacklogItem | None
+next_id(store: StoreContext) -> str
+generate_index(store: StoreContext) -> str
+check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> None
 ```
 
 `list_items` 和 `show_item` 是 portable core read API：调用者必须先通过
 `store.load_store()` 获得准确的 `StoreContext`，它们不会检查 CWD、项目路径或 legacy layout，也不会创建任何文件。
-在 BAC-031/BAC-032 完成前，CLI 与 mutation API 继续通过明确命名的 legacy adapter 保持既有
+在 BAC-032 完成前，CLI 继续通过明确命名的 legacy adapter 保持既有
 `<target>/backlog/`、`<target>/docs/backlog/` 和 CWD discovery 行为；该 adapter 不属于 portable core。
 
 ## 关键设计决策

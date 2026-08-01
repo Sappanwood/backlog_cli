@@ -12,19 +12,27 @@ from backlog.items import (
     _find_backlog_dir,
     _jsonify,
     _load_item,
-    add_item,
-    generate_index,
     get_backlog_dir,
     get_item_filepath,
     get_items_dir,
-    next_id,
-    update_item,
+)
+from backlog.items import (
+    add_legacy_item as add_item,
+)
+from backlog.items import (
+    generate_legacy_index as generate_index,
 )
 from backlog.items import (
     list_legacy_items as list_items,
 )
 from backlog.items import (
+    next_legacy_id as next_id,
+)
+from backlog.items import (
     show_legacy_item as show_item,
+)
+from backlog.items import (
+    update_legacy_item as update_item,
 )
 from backlog.models import (
     BacklogItem,
@@ -752,6 +760,26 @@ body text""")
         import hashlib
         expected_md5 = hashlib.md5(filepath.read_bytes()).hexdigest()[:8]
         assert loaded.revision == expected_md5
+
+    def test_legacy_revision_conflict_does_not_create_missing_index(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        _write_item(items_dir, "TST-001")
+        index_path = items_dir.parent / "INDEX.md"
+
+        with pytest.raises(ValueError, match="Revision mismatch"):
+            update_item("TST-001", {"title": "Must not write"}, tmp_path, expected_revision="wrong")
+
+        assert not index_path.exists()
+
+    def test_legacy_parse_failure_does_not_create_missing_index(self, tmp_path):
+        items_dir = _make_tmp_backlog_dir(tmp_path)
+        (items_dir / "TST-001.md").write_text("not frontmatter")
+        index_path = items_dir.parent / "INDEX.md"
+
+        with pytest.raises(BacklogItemParseError):
+            update_item("TST-001", {"title": "Must not write"}, tmp_path)
+
+        assert not index_path.exists()
 
 
 class TestExactPathScope:

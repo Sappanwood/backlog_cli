@@ -11,7 +11,7 @@ from pathlib import Path
 import frontmatter
 
 from .models import BacklogItem, Status
-from .store import StoreContext
+from .store import StoreContext, StoreManifest
 
 ITEMS_DIRNAME = "items"
 INDEX_FILENAME = "INDEX.md"
@@ -80,16 +80,12 @@ def get_project_prefix(project_name: str) -> str:
     return project_name[:3].upper()
 
 
-def check_dependencies(
-    item_id: str,
-    depends_on: list[str],
-    project_path: Path | None = None,
-) -> None:
+def check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> None:
     """Validate dependency constraints: self-dependency, existence, and cycle detection."""
     if item_id in depends_on:
         raise ValueError(f"Self dependency detected: '{item_id}' cannot depend on itself.")
 
-    all_items = list_legacy_items(project_path)
+    all_items = list_items(store)
     existing_ids = {item.id for item in all_items}
 
     for dep in depends_on:
@@ -130,25 +126,27 @@ def get_warnings() -> list[str]:
     return w
 
 
-def _rebuild_index_silent(project_path: Path | None = None) -> None:
+def _rebuild_index_silent(store: StoreContext) -> None:
     """Silently rebuild the INDEX.md file, saving errors to warnings."""
     try:
-        content = generate_index(project_path)
-        backlog_dir = get_backlog_dir(project_path, create=True)
-        index_path = backlog_dir / INDEX_FILENAME
-        temp_index_path = index_path.with_suffix(".tmp")
-        temp_index_path.write_text(content)
-        temp_index_path.replace(index_path)
+        content = generate_index(store)
+        index_path = store.index_path
+        _atomic_publish_text(index_path, content)
     except Exception as e:
         _items_warnings.append(f"Failed to rebuild INDEX.md: {e}")
 
 
 @contextlib.contextmanager
-def _lock_backlog(project_path: Path | None = None):
-    """Acquire an exclusive lock on the backlog directory using a lock file."""
-    backlog_dir = get_backlog_dir(project_path, create=True)
-    lock_file_path = backlog_dir / ".lock"
-    with open(lock_file_path, "w") as lock_file:
+def _lock_store(store: StoreContext):
+    """Acquire the exact store lock, creating only its optional regular lock file."""
+    lock_file_path = store.lock_path
+    try:
+        mode = lock_file_path.lstat().st_mode
+    except FileNotFoundError:
+        mode = None
+    if mode is not None and not stat.S_ISREG(mode):
+        raise ValueError(f"Store lock must be a regular file: {lock_file_path}")
+    with open(lock_file_path, "a") as lock_file:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             yield
@@ -288,61 +286,120 @@ def show_legacy_item(item_id: str, project_path: Path | None = None) -> BacklogI
     return item
 
 
-def next_id(project_name: str, project_path: Path | None = None) -> str:
-    """Generate the next sequential ID for a project, based on prefix matching with compatibility logic."""
-    if not re.match(r"^[a-zA-Z0-9_-]+$", project_name):
-        raise ValueError("Invalid project name format")
-    prefix = get_project_prefix(project_name)
-    items = list_legacy_items(project_path)
-    
-    # Extract prefixes of existing items belonging to this project
-    project_items = [item for item in items if item.project == project_name]
-    prefixes = set()
-    for item in project_items:
-        parts = item.id.split("-")
-        if len(parts) > 1:
-            prefixes.add(parts[0])
-            
-    # If there is exactly one existing prefix, reuse it to maintain continuity
-    if len(prefixes) == 1:
-        prefix = list(prefixes)[0]
+def _validate_item_identity(
+    item: BacklogItem,
+    store: StoreContext,
+    *,
+    allow_auto: bool = False,
+) -> None:
+    """Require persisted item identity to match the exact store manifest."""
+    if item.project != store.manifest.project_id:
+        raise ValueError(
+            f"Item project '{item.project}' does not match store manifest project_id "
+            f"'{store.manifest.project_id}'."
+        )
+    if item.id == "AUTO":
+        if allow_auto:
+            return
+        raise ValueError("Persisted item ID cannot be AUTO.")
+    if not item.id.startswith(f"{store.manifest.id_prefix}-"):
+        raise ValueError(
+            f"Item ID '{item.id}' does not match store manifest id_prefix "
+            f"'{store.manifest.id_prefix}'."
+        )
 
+
+def next_id(store: StoreContext) -> str:
+    """Allocate the next ID using only the exact store manifest prefix."""
+    prefix = store.manifest.id_prefix
+    sequence_pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
     existing = [
-        int(item.id.split("-")[-1])
-        for item in items
-        if item.id.startswith(f"{prefix}-")
+        int(match.group(1))
+        for item in list_items(store)
+        if (match := sequence_pattern.fullmatch(item.id)) is not None
     ]
-    if not existing:
-        return f"{prefix}-001"
-    return f"{prefix}-{max(existing) + 1:03d}"
+    return f"{prefix}-{max(existing, default=0) + 1:03d}"
 
 
-def add_item(item: BacklogItem, project_path: Path | None = None) -> Path:
-    """Create a new backlog item file. Returns the file path."""
-    with _lock_backlog(project_path):
+def _item_post(item: BacklogItem) -> frontmatter.Post:
+    metadata = item.model_dump(
+        mode="json",
+        exclude={"body", "score", "effective_status"},
+        exclude_none=True,
+    )
+    extra = metadata.pop("extra", {})
+    if extra:
+        metadata.update(extra)
+    return frontmatter.Post(item.body, **metadata)
+
+
+def _temporary_publish_path(filepath: Path) -> Path:
+    return filepath.with_suffix(".tmp")
+
+
+def _validate_temporary_publish_path(temp_filepath: Path) -> None:
+    """Reject any pre-existing publication temp entry without following it."""
+    try:
+        mode = temp_filepath.lstat().st_mode
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ValueError(f"Cannot inspect temporary publish path: {temp_filepath}") from error
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"Temporary publish path must not be a symlink: {temp_filepath}")
+    if not stat.S_ISREG(mode):
+        raise ValueError(f"Temporary publish path must be a regular file: {temp_filepath}")
+    raise ValueError(f"Temporary publish path already exists: {temp_filepath}")
+
+
+def _prepare_mutation_publication(item_filepath: Path, store: StoreContext) -> None:
+    """Preflight all mutation temp paths before publishing either item or index."""
+    _validate_temporary_publish_path(_temporary_publish_path(item_filepath))
+    _validate_temporary_publish_path(_temporary_publish_path(store.index_path))
+
+
+def _atomic_publish_text(filepath: Path, content: str) -> None:
+    """Create a fresh contained temp file and atomically replace its final path."""
+    temp_filepath = _temporary_publish_path(filepath)
+    _validate_temporary_publish_path(temp_filepath)
+    try:
+        with temp_filepath.open("x", encoding="utf-8") as temp_file:
+            temp_file.write(content)
+    except FileExistsError as error:
+        raise ValueError(f"Temporary publish path already exists: {temp_filepath}") from error
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_filepath.unlink()
+        raise
+    try:
+        temp_filepath.replace(filepath)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            temp_filepath.unlink()
+        raise
+
+
+def _replace_item(filepath: Path, item: BacklogItem) -> None:
+    _atomic_publish_text(filepath, _dump_post(_item_post(item)))
+
+
+def add_item(item: BacklogItem, store: StoreContext) -> Path:
+    """Create one item through an exact StoreContext."""
+    _validate_item_identity(item, store, allow_auto=True)
+    with _lock_store(store):
         if item.id == "AUTO":
-            item.id = next_id(item.project, project_path)
+            item.id = next_id(store)
+        _validate_item_identity(item, store)
         if not item.revision:
             item.revision = uuid.uuid4().hex[:8]
 
-        check_dependencies(item.id, item.depends_on, project_path)
-        filepath = get_item_filepath(item.id, project_path, create=True)
+        check_dependencies(item.id, item.depends_on, store)
+        filepath = _store_item_path(item.id, store)
         if filepath.exists():
             raise FileExistsError(f"Backlog item with ID '{item.id}' already exists.")
-        metadata = item.model_dump(
-            mode="json",
-            exclude={"body", "score", "effective_status"},
-            exclude_none=True,
-        )
-        extra = metadata.pop("extra", {})
-        if extra:
-            metadata.update(extra)
-        post = frontmatter.Post(item.body, **metadata)
-        
-        temp_filepath = filepath.with_suffix(".tmp")
-        temp_filepath.write_text(_dump_post(post))
-        temp_filepath.replace(filepath)
-        _rebuild_index_silent(project_path)
+        _prepare_mutation_publication(filepath, store)
+        _replace_item(filepath, item)
+        _rebuild_index_silent(store)
         return filepath
 
 
@@ -359,59 +416,60 @@ def _jsonify(value):
 
 
 def update_item(
-    item_id: str, updates: dict, project_path: Path | None = None, expected_revision: str | None = None
+    item_id: str,
+    updates: dict,
+    store: StoreContext,
+    expected_revision: str | None = None,
 ) -> BacklogItem | None:
-    """Update a backlog item's frontmatter fields, preserving body. Supports expected_revision."""
-    with _lock_backlog(project_path):
-        if "depends_on" in updates:
-            check_dependencies(item_id, updates["depends_on"], project_path)
-        filepath = get_item_filepath(item_id, project_path, create=False)
-        if not filepath.exists():
-            return None
+    """Patch one item through an exact StoreContext with optimistic revision checking."""
+    if "id" in updates and updates["id"] != item_id:
+        raise ValueError("Item ID cannot be changed.")
+    if "project" in updates and updates["project"] != store.manifest.project_id:
+        raise ValueError("Item project does not match store manifest project_id.")
 
-        current = show_legacy_item(item_id, project_path)
+    current = show_item(item_id, store)
+    if current is None:
+        return None
+    _validate_item_identity(current, store)
+    if current.id != item_id:
+        raise ValueError(f"Item frontmatter ID '{current.id}' does not match physical item ID '{item_id}'.")
+
+    with _lock_store(store):
+        current = show_item(item_id, store)
         if current is None:
             return None
-
+        _validate_item_identity(current, store)
+        if current.id != item_id:
+            raise ValueError(f"Item frontmatter ID '{current.id}' does not match physical item ID '{item_id}'.")
         if expected_revision is not None and current.revision != expected_revision:
             raise ValueError(f"Revision mismatch: expected '{expected_revision}', but current is '{current.revision}'")
+        if "depends_on" in updates:
+            check_dependencies(item_id, updates["depends_on"], store)
 
-        body = current.body
-        current_data = current.model_dump(mode="json", exclude={"body", "score", "effective_status"}, exclude_none=True)
-
+        current_data = current.model_dump(
+            mode="json",
+            exclude={"score", "effective_status"},
+            exclude_none=True,
+        )
         for key, value in updates.items():
             if value is not None:
                 current_data[key] = _jsonify(value)
-
         if current_data.get("status") != Status.DONE.value:
             current_data.pop("fixed_at", None)
-
         current_data["updated"] = date.today().isoformat()
         current_data["revision"] = uuid.uuid4().hex[:8]
 
-        extra = current_data.pop("extra", {})
-        if extra:
-            current_data.update(extra)
-
-        body = current_data.pop("body", body)
-
-        post = frontmatter.Post(body, **current_data)
-        
-        temp_filepath = filepath.with_suffix(".tmp")
-        temp_filepath.write_text(_dump_post(post))
-        temp_filepath.replace(filepath)
-        _rebuild_index_silent(project_path)
-        return show_legacy_item(item_id, project_path)
+        updated = BacklogItem.model_validate(current_data)
+        _validate_item_identity(updated, store)
+        filepath = _store_item_path(item_id, store)
+        _prepare_mutation_publication(filepath, store)
+        _replace_item(filepath, updated)
+        _rebuild_index_silent(store)
+        return show_item(item_id, store)
 
 
-def generate_index(
-    project_path: Path | None = None,
-    project: str | None = None,
-) -> str:
-    """Generate an INDEX.md overview for the backlog."""
-    items = list_legacy_items(project_path)
-    if project:
-        items = [i for i in items if i.project == project]
+def _render_index(items: list[BacklogItem]) -> str:
+    """Render an index from already-resolved items."""
     items.sort(key=lambda x: x.score, reverse=True)
 
     lines = [
@@ -459,3 +517,95 @@ def generate_index(
         )
 
     return "\n".join(lines) + "\n"
+
+
+def generate_index(store: StoreContext) -> str:
+    """Generate an INDEX.md overview using only an exact StoreContext."""
+    return _render_index(list_items(store))
+
+
+def _legacy_prefix(project_name: str, project_path: Path | None) -> str:
+    """Apply historical directory/name prefix inference in the legacy adapter only."""
+    prefix = get_project_prefix(project_name)
+    prefixes = {
+        item.id.split("-", 1)[0]
+        for item in list_legacy_items(project_path)
+        if item.project == project_name and "-" in item.id
+    }
+    return next(iter(prefixes)) if len(prefixes) == 1 else prefix
+
+
+def _legacy_store_context(
+    project_path: Path | None,
+    project_name: str,
+    *,
+    create: bool,
+    id_prefix: str | None = None,
+) -> StoreContext:
+    """Resolve a historical target layout before entering exact mutation core."""
+    backlog_dir = get_backlog_dir(project_path, create=create)
+    items_path = get_items_dir(project_path, create=create)
+    index_path = backlog_dir / INDEX_FILENAME
+    manifest = StoreManifest.model_validate(
+        {
+            "schema": "backlog/Store@1",
+            "project_id": project_name,
+            "id_prefix": id_prefix or _legacy_prefix(project_name, project_path),
+        }
+    )
+    return StoreContext(
+        root=backlog_dir.resolve(),
+        manifest=manifest,
+        manifest_path=backlog_dir / "backlog.json",
+        items_path=items_path.resolve(),
+        index_path=index_path,
+        lock_path=backlog_dir / ".lock",
+    )
+
+
+def next_legacy_id(project_name: str, project_path: Path | None = None) -> str:
+    """Generate an ID through the legacy layout adapter."""
+    return next_id(_legacy_store_context(project_path, project_name, create=False))
+
+
+def add_legacy_item(item: BacklogItem, project_path: Path | None = None) -> Path:
+    """Create an item through the historical target-layout adapter."""
+    id_prefix = item.id.split("-", 1)[0] if item.id != "AUTO" and "-" in item.id else None
+    return add_item(
+        item,
+        _legacy_store_context(project_path, item.project, create=True, id_prefix=id_prefix),
+    )
+
+
+def update_legacy_item(
+    item_id: str,
+    updates: dict,
+    project_path: Path | None = None,
+    expected_revision: str | None = None,
+) -> BacklogItem | None:
+    """Patch an item through the historical target-layout adapter."""
+    current = show_legacy_item(item_id, project_path)
+    if current is None:
+        return None
+    return update_item(
+        item_id,
+        updates,
+        _legacy_store_context(
+            project_path,
+            current.project,
+            create=True,
+            id_prefix=current.id.split("-", 1)[0],
+        ),
+        expected_revision=expected_revision,
+    )
+
+
+def generate_legacy_index(
+    project_path: Path | None = None,
+    project: str | None = None,
+) -> str:
+    """Generate a historical-layout index without exposing discovery to core APIs."""
+    items = list_legacy_items(project_path)
+    if project:
+        items = [item for item in items if item.project == project]
+    return _render_index(items)

@@ -14,18 +14,24 @@ from rich.table import Table
 from .items import (
     INDEX_FILENAME,
     BacklogItemParseError,
-    add_item,
-    generate_index,
     get_backlog_dir,
     get_item_filepath,
     get_warnings,
-    update_item,
+)
+from .items import (
+    add_legacy_item as add_item,
+)
+from .items import (
+    generate_legacy_index as generate_index,
 )
 from .items import (
     list_legacy_items as list_items,
 )
 from .items import (
     show_legacy_item as show_item,
+)
+from .items import (
+    update_legacy_item as update_item,
 )
 from .models import (
     BacklogItem,
