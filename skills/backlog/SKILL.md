@@ -37,7 +37,7 @@ CRUD 场景时才主动操作。
 ## Catalog descriptor 路径解析
 
 所有已注册项目的 backlog 操作前，按 `/home/ling/workspace/AGENTS.md` 的 Catalog 路由规则运行
-`/home/ling/workspace/project-ops/bin/workspace project resolve <target> --catalog /home/ling/workspace/project-ops/catalog/workspace.json --json`。
+`/home/ling/workspace/workspace-control/bin/workspace project resolve <target> --catalog /home/ling/workspace/workspace-control/catalog/workspace.json --json`。
 对 project scope，要求唯一的 `backlog/store@1` descriptor，记 `dirname(root)` 为 `<backlog-target>`，并读取 resolved Repo 的 `AGENTS.md`。对 workspace scope，要求 `workspace/artifacts@1` source descriptor 并确认其直接子目录 `backlog/` 是唯一 backlog root，记 source root 为 `<backlog-target>`。两种 scope 都不得从路径猜测或回退到 Repo 内创建 `docs/backlog/`。
 
 只有处理未注册的独立 Repo 时，才允许依赖 `backlog` 从当前工作目录向上查找
