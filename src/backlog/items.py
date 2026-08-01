@@ -155,20 +155,34 @@ def _rebuild_index_silent(store: StoreContext) -> None:
 
 @contextlib.contextmanager
 def _lock_store(store: StoreContext):
-    """Acquire the exact store lock, creating only its optional regular lock file."""
-    lock_file_path = store.lock_path
+    """Acquire an advisory lock on the exact canonical store directory inode."""
+    lock_directory = store.lock_path
     try:
-        mode = lock_file_path.lstat().st_mode
-    except FileNotFoundError:
-        mode = None
-    if mode is not None and not stat.S_ISREG(mode):
-        raise ValueError(f"Store lock must be a regular file: {lock_file_path}")
-    with open(lock_file_path, "a") as lock_file:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            yield
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        mode = lock_directory.lstat().st_mode
+        resolved = lock_directory.resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"Cannot inspect store lock directory: {lock_directory}") from error
+    if not stat.S_ISDIR(mode) or resolved != store.root:
+        raise ValueError(f"Store lock directory must be the canonical store root: {lock_directory}")
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    except AttributeError as error:
+        raise ValueError("Directory inode locking requires O_DIRECTORY and O_CLOEXEC") from error
+    try:
+        descriptor = os.open(lock_directory, flags)
+    except OSError as error:
+        raise ValueError(f"Cannot open store lock directory: {lock_directory}") from error
+    try:
+        opened = os.fstat(descriptor)
+        expected = store.root.stat()
+        if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+            raise ValueError("Store lock directory inode changed before lock acquisition.")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def _refresh_store_authority_locked(store: StoreContext) -> StoreContext:
@@ -270,6 +284,30 @@ def list_items(store: StoreContext) -> list[BacklogItem]:
             items.append(_load_item(safe_path))
     _apply_dependency_blocking(items)
     return items
+
+
+def validate_store_items(store: StoreContext) -> list[BacklogItem]:
+    """Validate every persisted item through the canonical parser without writing."""
+    validated: list[BacklogItem] = []
+    for filepath in sorted(store.items_path.iterdir()):
+        if filepath.name == ".gitkeep":
+            try:
+                mode = filepath.lstat().st_mode
+                resolved = filepath.resolve(strict=True)
+            except OSError as error:
+                raise BacklogItemParseError(filepath, error) from error
+            if not stat.S_ISREG(mode) or not resolved.is_relative_to(store.items_path):
+                raise BacklogItemParseError(filepath, ValueError("items placeholder must be a contained regular file"))
+            continue
+        if filepath.suffix != ".md" or filepath.name != f"{filepath.stem}.md":
+            raise BacklogItemParseError(filepath, ValueError("item entry must be a Markdown file"))
+        safe_path = _store_item_path(filepath.stem, store)
+        item = _load_item(safe_path)
+        if item.id != filepath.stem:
+            raise ValueError(f"Item frontmatter ID '{item.id}' does not match physical item ID '{filepath.stem}'.")
+        _validate_item_identity(item, store)
+        validated.append(item)
+    return validated
 
 
 def show_item(item_id: str, store: StoreContext) -> BacklogItem | None:
@@ -624,7 +662,7 @@ def _legacy_store_context(
         manifest_path=manifest_path,
         items_path=items_path.resolve(),
         index_path=index_path,
-        lock_path=backlog_dir / ".lock",
+        lock_path=backlog_dir.resolve(),
     )
 
 
@@ -695,7 +733,6 @@ def provision_legacy_store(
     items_path = root / ITEMS_DIRNAME
     index_path = root / INDEX_FILENAME
     manifest_path = root / "backlog.json"
-    lock_path = root / ".lock"
     manifest = StoreManifest.model_validate(
         {"schema": "backlog/Store@1", "project_id": project_id, "id_prefix": id_prefix}
     )
@@ -705,7 +742,7 @@ def provision_legacy_store(
         manifest_path=manifest_path,
         items_path=items_path,
         index_path=index_path,
-        lock_path=lock_path,
+        lock_path=root,
     )
     with _lock_store(store):
         for path, description, expected_mode in (
@@ -726,12 +763,7 @@ def provision_legacy_store(
             pass
         else:
             raise ValueError(f"Store manifest already exists and will not be overwritten: {manifest_path}")
-        for filepath in sorted(items_path.glob("*.md")):
-            safe_path = _store_item_path(filepath.stem, store)
-            item = _load_item(safe_path)
-            if item.id != filepath.stem:
-                raise ValueError(f"Item frontmatter ID '{item.id}' does not match physical item ID '{filepath.stem}'.")
-            _validate_item_identity(item, store)
+        validate_store_items(store)
 
         temp_path = root / f".backlog.json.{uuid.uuid4().hex}.tmp"
         temp_created = False
@@ -752,3 +784,49 @@ def provision_legacy_store(
                 with contextlib.suppress(FileNotFoundError):
                     temp_path.unlink()
         return load_store(root)
+
+
+def validate_legacy_store(
+    project_path: Path | None,
+    *,
+    project_id: str,
+    id_prefix: str,
+) -> StoreContext:
+    """Validate one manifest-less legacy store through the portable item parser without writing."""
+    backlog_dir = get_backlog_dir(project_path, create=False)
+    try:
+        root_mode = backlog_dir.lstat().st_mode
+    except FileNotFoundError as error:
+        raise ValueError(f"Legacy store root is missing: {backlog_dir}") from error
+    if not stat.S_ISDIR(root_mode):
+        raise ValueError(f"Legacy store root must be a directory: {backlog_dir}")
+    root = backlog_dir.resolve(strict=True)
+    items_path = root / ITEMS_DIRNAME
+    index_path = root / INDEX_FILENAME
+    manifest_path = root / "backlog.json"
+    if manifest_path.exists() or manifest_path.is_symlink():
+        raise ValueError(f"Legacy store manifest already exists: {manifest_path}")
+    for path, description, expected_mode in (
+        (items_path, "items directory", stat.S_ISDIR),
+        (index_path, "index", stat.S_ISREG),
+    ):
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError as error:
+            raise ValueError(f"Legacy {description} is missing: {path}") from error
+        if not expected_mode(mode):
+            raise ValueError(f"Legacy {description} has an invalid type: {path}")
+        if not path.resolve(strict=True).is_relative_to(root):
+            raise ValueError(f"Legacy {description} escapes store root: {path}")
+    store = StoreContext(
+        root=root,
+        manifest=StoreManifest.model_validate(
+            {"schema": "backlog/Store@1", "project_id": project_id, "id_prefix": id_prefix}
+        ),
+        manifest_path=manifest_path,
+        items_path=items_path,
+        index_path=index_path,
+        lock_path=root,
+    )
+    validate_store_items(store)
+    return store

@@ -24,6 +24,8 @@ from .items import (
     provision_legacy_store,
     show_item,
     update_item,
+    validate_legacy_store,
+    validate_store_items,
 )
 from .models import (
     BacklogItem,
@@ -874,6 +876,45 @@ def provision_store(
         _print_json_success(data)
         return
     console.print(f"[green]Provisioned[/green] {store.manifest_path}")
+
+
+@app.command(name="validate-store")
+def validate_store(
+    project_id: str | None = typer.Option(
+        None, "--project-id", help="Legacy store project_id to validate without writing"
+    ),
+    id_prefix: str | None = typer.Option(
+        None, "--id-prefix", help="Legacy store ID prefix to validate without writing"
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Validate all Store@1 items without creating or modifying store entries."""
+    try:
+        if _store_context is not None:
+            if project_id is not None or id_prefix is not None:
+                raise ValueError("Exact --store validation derives identity from its manifest.")
+            store = _store_context
+        else:
+            if project_id is None or id_prefix is None:
+                raise ValueError("Legacy validation requires --project-id and --id-prefix.")
+            store = validate_legacy_store(_target_path, project_id=project_id, id_prefix=id_prefix)
+        items = validate_store_items(store)
+    except (BacklogItemParseError, StoreLoadError, ValueError) as error:
+        if json_output:
+            _print_json_error("STORE_INVALID", str(error))
+        else:
+            console.print(f"[red]Error: {error}[/red]")
+        raise typer.Exit(1) from error
+    data = {
+        "store": str(store.root),
+        "project_id": store.manifest.project_id,
+        "id_prefix": store.manifest.id_prefix,
+        "items": len(items),
+    }
+    if json_output:
+        _print_json_success(data)
+        return
+    console.print(f"[green]Validated[/green] {store.root} ({len(items)} items)")
 
 
 def run_cli():

@@ -219,6 +219,7 @@ class TestProvisionStoreCommand:
             "project_id": "legacy-project",
             "id_prefix": "LEG",
         }
+        assert not (root / ".lock").exists()
 
     def test_provision_rejects_conflicting_identity_without_manifest(self, tmp_path):
         root = tmp_path / "docs" / "backlog"
@@ -287,13 +288,11 @@ class TestProvisionStoreCommand:
         assert temporary.read_text(encoding="utf-8") == "keep"
         assert not (root / "backlog.json").exists()
 
-    def test_provision_rejects_invalid_lock_before_creating_manifest(self, tmp_path):
+    def test_provision_ignores_legacy_regular_lock_residue(self, tmp_path):
         root = tmp_path / "docs" / "backlog"
         (root / "items").mkdir(parents=True)
         (root / "INDEX.md").write_text("# Backlog Index\n", encoding="utf-8")
-        outside_lock = tmp_path / "outside.lock"
-        outside_lock.write_text("", encoding="utf-8")
-        (root / ".lock").symlink_to(outside_lock)
+        (root / ".lock").write_text("legacy residue", encoding="utf-8")
 
         result = CliRunner().invoke(
             app,
@@ -308,7 +307,25 @@ class TestProvisionStoreCommand:
             ],
         )
 
+        assert result.exit_code == 0
+        assert (root / ".lock").read_text(encoding="utf-8") == "legacy residue"
+
+    def test_validate_store_rejects_malformed_and_model_invalid_legacy_items_without_writing(self, tmp_path):
+        root = tmp_path / "docs" / "backlog"
+        (root / "items").mkdir(parents=True)
+        (root / "INDEX.md").write_text("# Backlog Index\n", encoding="utf-8")
+        invalid = root / "items" / "LEG-001.md"
+        invalid.write_text("---\nid: LEG-001\nproject: legacy\nstatus: impossible\n---\n", encoding="utf-8")
+        before = invalid.read_bytes()
+
+        result = CliRunner().invoke(
+            app,
+            ["--target", str(tmp_path), "validate-store", "--project-id", "legacy", "--id-prefix", "LEG", "--json"],
+        )
+
         assert result.exit_code == 1
+        assert json.loads(result.stdout)["error"]["code"] == "STORE_INVALID"
+        assert invalid.read_bytes() == before
         assert not (root / "backlog.json").exists()
 
     def test_cwd_provisioning_uses_discovered_legacy_store(self, tmp_path, monkeypatch):

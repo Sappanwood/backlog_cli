@@ -29,6 +29,7 @@ In a checked-out development environment, the local virtualenv command also work
 
 The authoritative interface accepts an exact, absolute portable store root. It must already contain a valid
 `backlog.json`, `items/`, and `INDEX.md`; read commands do not create files or discover parent/child directories.
+Mutations use an advisory lock on the canonical store directory inode and do not create a `.lock` file in the store.
 
 ```bash
 uv run backlog --store /absolute/path/to/backlog list --status todo
@@ -68,6 +69,14 @@ conflicts without overwriting them:
 ```bash
 uv run backlog --target /path/to/legacy-project provision-store \
   --project-id my-project --id-prefix PRO
+```
+
+Administrators can validate every persisted item without writing before provisioning:
+
+```bash
+uv run backlog --target /path/to/legacy-project validate-store \
+  --project-id my-project --id-prefix PRO --json
+uv run backlog --store /absolute/path/to/backlog validate-store --json
 ```
 
 ## Data Model

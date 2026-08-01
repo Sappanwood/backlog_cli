@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 MANIFEST_FILENAME = "backlog.json"
 ITEMS_DIRNAME = "items"
 INDEX_FILENAME = "INDEX.md"
-LOCK_FILENAME = ".lock"
 
 _PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 _ID_PREFIX_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -113,7 +112,6 @@ def load_store(root: Path) -> StoreContext:
     manifest_path = resolved_root / MANIFEST_FILENAME
     items_path = resolved_root / ITEMS_DIRNAME
     index_path = resolved_root / INDEX_FILENAME
-    lock_path = resolved_root / LOCK_FILENAME
 
     _require_regular_file(manifest_path, "manifest")
     _require_contained(resolved_root, manifest_path, "manifest")
@@ -121,18 +119,11 @@ def load_store(root: Path) -> StoreContext:
     _require_contained(resolved_root, items_path, "items directory")
     _require_regular_file(index_path, "index")
     _require_contained(resolved_root, index_path, "index")
-    try:
-        _require_regular_file(lock_path, "lock")
-        _require_contained(resolved_root, lock_path, "lock")
-    except StoreLoadError as error:
-        if not error.args[0].startswith("lock is missing"):
-            raise
-
     return StoreContext(
         root=resolved_root,
         manifest=_load_manifest(manifest_path),
         manifest_path=manifest_path,
         items_path=items_path,
         index_path=index_path,
-        lock_path=lock_path,
+        lock_path=resolved_root,
     )

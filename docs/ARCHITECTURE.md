@@ -33,8 +33,7 @@ flowchart TD
 backlog/
 ├── backlog.json
 ├── items/
-├── INDEX.md
-└── .lock                 # 可选；仅在写入期间创建
+└── INDEX.md
 ```
 
 `backlog.json` 是严格 schema，且只能包含以下字段：
@@ -51,10 +50,10 @@ backlog/
 - `project_id` 必须以字母或数字开始，之后只能使用字母、数字、`-`、`_`。
 - `id_prefix` 必须以大写字母开始，之后只能使用大写字母、数字、`_`。
 - `backlog.json`、`items/` 和 `INDEX.md` 均为必需的直接 entry，分别必须是普通文件、目录和普通文件；
-  已存在的 `.lock` 也必须是普通文件。loader 不创建任何 entry。
+  其他 root entry 不属于 Store schema，loader 不扫描或解释它们。loader 和 read path 不创建任何 entry。
 
 `store.load_store(root)` 返回不可变的 `StoreContext`，统一持有 canonical root、manifest、manifest path、
-items path、index path 和 lock path。它仅接受绝对 root，并拒绝缺失、非规则 entry、静态 symlink 或
+items path、index path 和 canonical directory lock path。它仅接受绝对 root，并拒绝缺失、非规则 entry、静态 symlink 或
 解析后逃逸 root 的路径。当前安全边界是受信任本机用户和受信任 store root：防御静态 containment escape
 并支持正常并发；不承诺抵抗同一用户在校验后替换 ancestor 的攻击。
 
@@ -91,7 +90,8 @@ Markdown 正文（body）
 ### ID 生成流程
 
 1. Core 只从 `StoreContext.manifest.id_prefix` 取得前缀。
-2. 在 exact store 的 `.lock` 上取得排他锁后分配 ID。
+2. 在 exact canonical store root 的目录 inode 上取得 POSIX `flock` 排他锁后分配 ID；使用
+   `O_DIRECTORY|O_CLOEXEC` 打开目录，不在 store 内创建 `.lock` 或其他 runtime entry。
 3. 扫描该前缀在 exact `items/` 目录中的最大序号，返回 `<前缀>-<最大序号+1>`（三位补零，如 `BAC-023`）。
 4. 创建和 patch 均验证 item 的 `project` 和 ID prefix 与 manifest 一致；验证失败、依赖失败和 revision conflict 不会写入 item 或 index。
 5. mutation 取得 store lock 后重新载入同一 exact root 的 manifest；若 legacy adapter 先前构造的 context 已被不同 identity 的
@@ -116,7 +116,7 @@ expected revision、验证依赖、识别 no-op，并仅在有实际变更时生
 root 创建 manifest。该路径要求 root、`items/`、`INDEX.md` 均为 contained regular entries，验证每个 item 的
 物理 ID、`project` 与 prefix，并使用 no-clobber publish 创建 `backlog.json`；不猜测 identity，也不覆盖
 已有 manifest。最终 manifest 检查、完整 item 验证、publish 与 post-publish load 都在与 normal mutation
-共享的 store lock 内执行。
+共享的目录 inode lock 内执行。
 
 ### Agent JSON 与 work queue
 

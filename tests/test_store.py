@@ -128,7 +128,7 @@ class TestLoadStore:
         assert context.manifest_path == root / "backlog.json"
         assert context.items_path == root / "items"
         assert context.index_path == root / "INDEX.md"
-        assert context.lock_path == root / ".lock"
+        assert context.lock_path == root
         with pytest.raises(AttributeError):
             context.root = tmp_path  # type: ignore[misc]
         with pytest.raises(ValidationError):
@@ -225,14 +225,11 @@ class TestLoadStore:
         with pytest.raises(StoreLoadError, match="regular|directory"):
             load_store(root)
 
-    def test_rejects_existing_symlink_lock(self, tmp_path):
+    def test_ignores_legacy_regular_lock_residue(self, tmp_path):
         root = _make_store(tmp_path)
-        outside_lock = tmp_path / "outside.lock"
-        outside_lock.write_text("")
-        (root / ".lock").symlink_to(outside_lock)
+        (root / ".lock").write_text("legacy residue")
 
-        with pytest.raises(StoreLoadError, match="lock.*regular"):
-            load_store(root)
+        assert load_store(root).lock_path == root
 
 
 class TestStoreContextReads:
@@ -429,7 +426,6 @@ class TestExactStoreMutations:
     def test_temp_symlinks_fail_without_mutating_the_store(self, tmp_path, temp_name, target_kind):
         root = _make_store(tmp_path)
         store = load_store(root)
-        (root / ".lock").write_text("")
         temp_path = root / "items" / temp_name if temp_name.startswith("POR") else root / temp_name
         outside = tmp_path / "outside.tmp"
         if target_kind == "external":
@@ -438,7 +434,7 @@ class TestExactStoreMutations:
         before = _store_snapshot(root)
         outside_before = outside.read_bytes() if outside.exists() else None
 
-        with pytest.raises(ValueError, match="(?i)temporary publish path"):
+        with pytest.raises((ValueError, StoreLoadError), match="(?i)(temporary publish path|unsupported entry)"):
             add_item(self._item("POR-001"), store)
 
         assert _store_snapshot(root) == before
@@ -520,3 +516,54 @@ print(add_item(item, store).name)
         assert [stderr for _, stderr in results] == ["", ""]
         assert {stdout.strip() for stdout, _ in results} == {"POR-001.md", "POR-002.md"}
         assert [item.id for item in list_items(load_store(root))] == ["POR-001", "POR-002"]
+        assert not (root / ".lock").exists()
+
+    def test_directory_inode_lock_serializes_processes_without_store_entry(self, tmp_path):
+        root = _make_store(tmp_path)
+        ready = tmp_path / "ready"
+        release = tmp_path / "release"
+        holder_code = """
+import os
+import time
+from pathlib import Path
+from backlog.items import _lock_store
+from backlog.store import load_store
+store = load_store(Path(os.environ['STORE']))
+with _lock_store(store):
+    Path(os.environ['READY']).write_text(str(os.stat(store.root).st_ino))
+    while not Path(os.environ['RELEASE']).exists():
+        time.sleep(0.01)
+"""
+        waiter_code = """
+import os
+from pathlib import Path
+from backlog.items import _lock_store
+from backlog.store import load_store
+store = load_store(Path(os.environ['STORE']))
+with _lock_store(store):
+    print(os.stat(store.root).st_ino, flush=True)
+"""
+        environment = os.environ | {"STORE": str(root), "READY": str(ready), "RELEASE": str(release)}
+        holder = subprocess.Popen([sys.executable, "-c", holder_code], env=environment)
+        waiter = None
+        try:
+            deadline = time.monotonic() + 5
+            while not ready.exists():
+                assert time.monotonic() < deadline, "holder did not acquire the directory lock"
+                time.sleep(0.01)
+            waiter = subprocess.Popen(
+                [sys.executable, "-c", waiter_code], env=environment, stdout=subprocess.PIPE, text=True
+            )
+            time.sleep(0.1)
+            assert waiter.poll() is None
+            release.write_text("release")
+            assert holder.wait(timeout=5) == 0
+            stdout, _ = waiter.communicate(timeout=5)
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+            if waiter is not None and waiter.poll() is None:
+                waiter.kill()
+
+        assert ready.read_text() == stdout.strip() == str(root.stat().st_ino)
+        assert not (root / ".lock").exists()
