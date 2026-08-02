@@ -21,11 +21,11 @@
 | [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 旧链接兼容入口 | skill 权威入口路径变化后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
 | Catalog resolved `artifacts.adr.root` | 查看产品定位、架构边界和候选方案取舍时 | 新增、替代或废弃架构决策时 |
-| Project `dirname(artifacts.backlog.root)` 或 workspace `sources.workspace_artifacts.root` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
+| Project resolved `artifacts.backlog.root` 或已校验的 workspace `sources.workspace_artifacts.root/backlog` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
 | Catalog resolved `artifacts.plans.root` | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 新增或更新执行计划时 |
 | Catalog resolved `artifacts.research.root` | 查阅项目级调研证据时 | 完成项目级调研时 |
-| `backlog --target <project descriptor parent or workspace source root> list --status todo` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后自动 `update --fixed` 标记 |
-| `backlog --target <project descriptor parent or workspace source root> stats` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
+| `backlog --store <resolved exact backlog root> list --status todo --json` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后使用 `update <ID> --status done --expected-revision <REV> --json` 标记 |
+| `backlog --store <resolved exact backlog root> stats --json` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
 
 ## 项目速览
 
@@ -48,8 +48,9 @@ uv run --group dev python -m pytest                      # 测试
 uv run --group dev ruff check .                          # Lint
 uv run --group dev python -m pyright                     # 类型检查
 
-# 手动测试（先通过 Catalog 得到 project descriptor parent 或 workspace source root）
-uv run backlog --target <Catalog-resolved adapter target> list --status todo
-uv run backlog --target <Catalog-resolved adapter target> add -T "测试" -c testing --priority P3
-uv run backlog --target <Catalog-resolved adapter target> stats
+# 手动测试（先解析 backlog-cli 并校验 backlog/store@1 descriptor）
+/home/ling/workspace/workspace-control/bin/workspace project resolve backlog-cli --catalog /home/ling/workspace/workspace-control/catalog/workspace.json --json
+uv run backlog --store <resolved-artifacts.backlog.root> list --status todo --json
+uv run backlog --store <resolved-artifacts.backlog.root> add -T "测试" -c testing --priority P3 --json
+uv run backlog --store <resolved-artifacts.backlog.root> stats --json
 ```
