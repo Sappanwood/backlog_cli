@@ -62,22 +62,9 @@ uv run backlog --store /absolute/path/to/backlog add \
   --body-file /tmp/body.md
 ```
 
-`--target` and CWD discovery remain compatibility adapters for existing `backlog/` and `docs/backlog/` layouts.
-They cannot be combined with `--store`; each adapter resolves one store before entering the same exact core. To adopt
-an existing legacy store, first ensure it has regular `items/` and
-`INDEX.md` entries, then provide its identity explicitly; the command rejects existing manifests and item identity
-conflicts without overwriting them:
+Administrators can validate every persisted item without writing:
 
 ```bash
-uv run backlog --target /path/to/legacy-project provision-store \
-  --project-id my-project --id-prefix PRO
-```
-
-Administrators can validate every persisted item without writing before provisioning:
-
-```bash
-uv run backlog --target /path/to/legacy-project validate-store \
-  --project-id my-project --id-prefix PRO --json
 uv run backlog --store /absolute/path/to/backlog validate-store --json
 ```
 
@@ -85,7 +72,7 @@ uv run backlog --store /absolute/path/to/backlog validate-store --json
 
 Each item has fields such as:
 
-- `id`: exact stores generate it from manifest `id_prefix`, for example `BAC-001`; legacy derivation is compatibility-only
+- `id`: stores generate it from manifest `id_prefix`, for example `BAC-001`
 - `project`: exact stores take this identifier from manifest `project_id`
 - `title`: short task title
 - `category`: `bug`, `feature`, `docs`, `testing`, `ops`, and other supported categories
@@ -122,14 +109,12 @@ Every successful call returns `{"ok": true, "data": ...}` and every failure retu
 `changed_fields`, `revision`, and `no_op`. `update --expected-revision` rejects stale writes with
 `REVISION_MISMATCH`; setting `--status done` fills `fixed_at` automatically.
 
-[agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) remains as a compatibility redirect for older links.
-
 Project architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Responsibility Boundaries
 
 Backlog CLI owns portable task intent, item CRUD, declared and derived status, dependencies, revisions, and the
-derived index. Compatibility adapters preserve older layouts but are not a new integration surface.
+derived index.
 
 Workspace Control owns local project routing, Catalog descriptors, and development services. Sigil owns execution
 workflow concerns such as runs, claims, checkpoints, submissions, review, worktrees, scheduling, and deciding whether

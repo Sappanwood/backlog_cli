@@ -9,30 +9,26 @@ import pytest
 from backlog.items import (
     BacklogItemParseError,
     _apply_dependency_blocking,
-    _find_backlog_dir,
     _jsonify,
     _load_item,
-    get_backlog_dir,
-    get_item_filepath,
-    get_items_dir,
 )
 from backlog.items import (
-    add_legacy_item as add_item,
+    add_item as _add_item,
 )
 from backlog.items import (
-    generate_legacy_index as generate_index,
+    generate_index as _generate_index,
 )
 from backlog.items import (
-    list_legacy_items as list_items,
+    list_items as _list_items,
 )
 from backlog.items import (
-    next_legacy_id as next_id,
+    next_id as _next_id,
 )
 from backlog.items import (
-    show_legacy_item as show_item,
+    show_item as _show_item,
 )
 from backlog.items import (
-    update_legacy_item as update_item,
+    update_item as _update_item,
 )
 from backlog.models import (
     BacklogItem,
@@ -40,6 +36,33 @@ from backlog.models import (
     Priority,
     Status,
 )
+from backlog.store import load_store
+
+
+def _store(root: Path):
+    return load_store(root)
+
+
+def add_item(item: BacklogItem, root: Path) -> Path:
+    return _add_item(item, _store(root))
+
+
+def generate_index(root: Path) -> str:
+    return _generate_index(_store(root))
+
+
+def list_items(root: Path) -> list[BacklogItem]:
+    return _list_items(_store(root))
+
+
+def show_item(item_id: str, root: Path) -> BacklogItem | None:
+    return _show_item(item_id, _store(root))
+
+
+def update_item(
+    item_id: str, updates: dict, root: Path, expected_revision: str | None = None
+) -> BacklogItem | None:
+    return _update_item(item_id, updates, _store(root), expected_revision=expected_revision)
 
 
 def _write_item(items_dir: Path, item_id: str, **overrides) -> Path:
@@ -87,62 +110,15 @@ def _write_item(items_dir: Path, item_id: str, **overrides) -> Path:
 
 
 def _make_tmp_backlog_dir(tmp_path: Path) -> Path:
-    """Create a docs/backlog/items/ directory inside tmp_path."""
-    base = tmp_path / "docs" / "backlog"
-    items_dir = base / "items"
+    """Create a valid exact store and return its items directory."""
+    items_dir = tmp_path / "items"
     items_dir.mkdir(parents=True)
+    (tmp_path / "INDEX.md").write_text("# Backlog Index\n", encoding="utf-8")
+    (tmp_path / "backlog.json").write_text(
+        '{"schema":"backlog/Store@1","project_id":"test","id_prefix":"TST"}\n',
+        encoding="utf-8",
+    )
     return items_dir
-
-
-class TestFindBacklogDir:
-    def test_finds_existing(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        result = _find_backlog_dir(tmp_path)
-        assert result is not None
-        assert result.name == "backlog"
-
-
-class TestGetBacklogDir:
-    def test_prefers_existing_direct_backlog_dir(self, tmp_path):
-        direct_backlog = tmp_path / "backlog"
-        direct_backlog.mkdir()
-
-        assert get_backlog_dir(tmp_path) == direct_backlog
-
-    def test_defaults_to_docs_backlog_for_existing_projects(self, tmp_path):
-        assert get_backlog_dir(tmp_path) == tmp_path / "docs" / "backlog"
-
-    def test_rejects_backlog_child_as_target(self, tmp_path):
-        child = tmp_path / "backlog"
-        child.mkdir()
-
-        with pytest.raises(ValueError, match="backlog store parent"):
-            get_backlog_dir(child, create=True)
-
-    def test_finds_from_subdir(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        subdir = tmp_path / "src" / "deep"
-        subdir.mkdir(parents=True)
-        result = _find_backlog_dir(subdir)
-        assert result is not None
-        assert result.name == "backlog"
-
-    def test_returns_none_when_not_found(self, tmp_path):
-        result = _find_backlog_dir(tmp_path)
-        assert result is None
-
-
-class TestGetItemsDir:
-    def test_creates_when_missing(self, tmp_path):
-        items_dir = get_items_dir(tmp_path, create=True)
-        assert items_dir.exists()
-        assert items_dir == tmp_path / "docs" / "backlog" / "items"
-        assert items_dir.name == "items"
-
-    def test_reuses_existing(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        result = get_items_dir(tmp_path)
-        assert result == items_dir
 
 
 class TestLoadItem:
@@ -256,21 +232,15 @@ class TestShowItem:
 class TestNextId:
     def test_first_id(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
-        nid = next_id("testing", tmp_path)
-        assert nid == "TES-001"
+        nid = _next_id(_store(tmp_path))
+        assert nid == "TST-001"
 
     def test_increments(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "TES-001", project="testing", id="TES-001")
-        _write_item(items_dir, "TES-002", project="testing", id="TES-002")
-        nid = next_id("testing", tmp_path)
-        assert nid == "TES-003"
-
-    def test_ignores_other_projects(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "OTH-001", project="other", id="OTH-001")
-        nid = next_id("testing", tmp_path)
-        assert nid == "TES-001"
+        _write_item(items_dir, "TST-001")
+        _write_item(items_dir, "TST-002")
+        nid = _next_id(_store(tmp_path))
+        assert nid == "TST-003"
 
 
 class TestAddItem:
@@ -286,11 +256,11 @@ class TestAddItem:
 
     def test_content_is_valid(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "DEP-001", project="test", title="Dep 1")
+        _write_item(items_dir, "TST-002", project="test", title="Dep 1")
         item = BacklogItem(
             id="TST-001", project="test", title="Hello",
             category=Category.BUG, priority=Priority.P0,
-            tags=["a", "b"], depends_on=["DEP-001"],
+            tags=["a", "b"], depends_on=["TST-002"],
             related_docs=["docs/ARCHITECTURE.md", "project-ops:research/topic.md"],
             body="## Body\nSome text.",
         )
@@ -299,7 +269,7 @@ class TestAddItem:
         assert loaded is not None
         assert loaded.title == "Hello"
         assert loaded.tags == ["a", "b"]
-        assert loaded.depends_on == ["DEP-001"]
+        assert loaded.depends_on == ["TST-002"]
         assert loaded.related_docs == ["docs/ARCHITECTURE.md", "project-ops:research/topic.md"]
         assert "## Body" in loaded.body
 
@@ -486,24 +456,6 @@ class TestJsonify:
         assert _jsonify(None) is None
 
 
-class TestPathSafety:
-    def test_get_item_filepath_valid(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        path = get_item_filepath("TST-001", tmp_path)
-        assert path.name == "TST-001.md"
-        assert path.parent == items_dir
-
-    def test_get_item_filepath_traversal(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        with pytest.raises(ValueError, match="Invalid item ID format|Path traversal detected"):
-            get_item_filepath("../evil", tmp_path)
-
-    def test_get_item_filepath_invalid_chars(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        with pytest.raises(ValueError, match="Invalid item ID format"):
-            get_item_filepath("TST/001", tmp_path)
-
-
 class TestConflictPrevention:
     def test_add_item_conflict_raises_error(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
@@ -545,37 +497,6 @@ class TestDecoupledBlockedStatus:
         assert post.metadata.get("status") == "todo"
         assert "is_blocked" not in post.metadata
         assert "effective_status" not in post.metadata
-
-
-class TestReadOnlyDirectoryCreation:
-    def test_list_items_does_not_create_dir(self, tmp_path):
-        base_dir = tmp_path / "docs" / "backlog"
-        items = list_items(tmp_path)
-        assert items == []
-        items_dir = base_dir / "items"
-        assert not items_dir.exists()
-
-    def test_show_item_does_not_create_dir(self, tmp_path):
-        base_dir = tmp_path / "docs" / "backlog"
-        item = show_item("TST-001", tmp_path)
-        assert item is None
-        items_dir = base_dir / "items"
-        assert not items_dir.exists()
-
-
-class TestUnifiedBacklogDirectoryIndex:
-    def test_index_written_to_correct_unified_dir(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "TST-001", project="p1")
-        _write_item(items_dir, "TST-002", project="p2")
-        
-        content = generate_index(tmp_path)
-        assert "TST-001" in content
-        assert "TST-002" in content
-        
-        content_filtered = generate_index(tmp_path, project="p1")
-        assert "TST-001" in content_filtered
-        assert "TST-002" not in content_filtered
 
 
 class TestConcurrencyAndAtomicReplace:
@@ -735,16 +656,16 @@ class TestRevisionAndLock:
 
     def test_missing_revision_md5_fallback(self, tmp_path):
         items_dir = _make_tmp_backlog_dir(tmp_path)
-        filepath = items_dir / "BAC-001.md"
+        filepath = items_dir / "TST-001.md"
         filepath.write_text("""---
 category: feature
 created: '2026-04-27'
 depends_on: []
 effort: M
-id: BAC-001
+id: TST-001
 impact: medium
 priority: P2
-project: backlog-cli
+project: test
 status: todo
 tags: []
 title: test title
@@ -752,7 +673,7 @@ updated: '2026-06-07'
 ---
 body text""")
         
-        loaded = show_item("BAC-001", tmp_path)
+        loaded = show_item("TST-001", tmp_path)
         assert loaded is not None
         assert loaded.revision != ""
         assert len(loaded.revision) == 8
@@ -760,36 +681,3 @@ body text""")
         import hashlib
         expected_md5 = hashlib.md5(filepath.read_bytes()).hexdigest()[:8]
         assert loaded.revision == expected_md5
-
-    def test_legacy_revision_conflict_does_not_create_missing_index(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        _write_item(items_dir, "TST-001")
-        index_path = items_dir.parent / "INDEX.md"
-
-        with pytest.raises(ValueError, match="Revision mismatch"):
-            update_item("TST-001", {"title": "Must not write"}, tmp_path, expected_revision="wrong")
-
-        assert not index_path.exists()
-
-    def test_legacy_parse_failure_does_not_create_missing_index(self, tmp_path):
-        items_dir = _make_tmp_backlog_dir(tmp_path)
-        (items_dir / "TST-001.md").write_text("not frontmatter")
-        index_path = items_dir.parent / "INDEX.md"
-
-        with pytest.raises(BacklogItemParseError):
-            update_item("TST-001", {"title": "Must not write"}, tmp_path)
-
-        assert not index_path.exists()
-
-
-class TestExactPathScope:
-    def test_explicit_dir_does_not_walk_upward(self, tmp_path):
-        _make_tmp_backlog_dir(tmp_path)
-        subdir = tmp_path / "src" / "deep"
-        subdir.mkdir(parents=True)
-        
-        from backlog.items import get_backlog_dir
-        
-        # 显式传入 subdir 必须精确落在 subdir 之下
-        base = get_backlog_dir(subdir)
-        assert base == subdir / "docs" / "backlog"

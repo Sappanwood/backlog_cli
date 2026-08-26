@@ -225,9 +225,9 @@ class TestLoadStore:
         with pytest.raises(StoreLoadError, match="regular|directory"):
             load_store(root)
 
-    def test_ignores_legacy_regular_lock_residue(self, tmp_path):
+    def test_ignores_stale_regular_lock_residue(self, tmp_path):
         root = _make_store(tmp_path)
-        (root / ".lock").write_text("legacy residue")
+        (root / ".lock").write_text("stale residue")
 
         assert load_store(root).lock_path == root
 

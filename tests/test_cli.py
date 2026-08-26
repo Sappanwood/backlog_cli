@@ -15,9 +15,15 @@ def runner():
 
 
 def _make_backlog(tmp_path: Path) -> Path:
-    """Create a docs/backlog/items/ dir and return the project path."""
-    items_dir = tmp_path / "docs" / "backlog" / "items"
+    """Create an exact Store@1 inside a project-shaped test directory."""
+    store = tmp_path / "docs" / "backlog"
+    items_dir = store / "items"
     items_dir.mkdir(parents=True)
+    (store / "INDEX.md").write_text("# Backlog Index\n", encoding="utf-8")
+    (store / "backlog.json").write_text(
+        '{"schema":"backlog/Store@1","project_id":"test","id_prefix":"TST"}\n',
+        encoding="utf-8",
+    )
     return tmp_path
 
 
@@ -48,7 +54,7 @@ def _write_item(items_dir: Path, item_id: str, **overrides):
 
 
 def _target_flag(project_path: Path) -> list[str]:
-    return ["--target", str(project_path)]
+    return ["--store", str(project_path / "docs" / "backlog")]
 
 
 class TestListCommand:
@@ -490,7 +496,7 @@ class TestCLIValidationAndSecurity:
         orig_argv = list(sys.argv)
         sys.argv = [
             "backlog",
-            "--target", str(project_path),
+        "--store", str(project_path / "docs" / "backlog"),
             "update", "TST-001",
             "--title", "New Title",
             "--expected-revision", "wrong-rev",

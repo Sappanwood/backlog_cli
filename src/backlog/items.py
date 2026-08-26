@@ -2,7 +2,6 @@
 
 import contextlib
 import fcntl
-import json
 import os
 import re
 import stat
@@ -14,7 +13,7 @@ from pathlib import Path
 import frontmatter
 
 from .models import BacklogItem, Status
-from .store import StoreContext, StoreManifest, load_store
+from .store import StoreContext, load_store
 
 ITEMS_DIRNAME = "items"
 INDEX_FILENAME = "INDEX.md"
@@ -44,57 +43,6 @@ class PatchResult:
 
 def _dump_post(post: frontmatter.Post) -> str:
     return frontmatter.dumps(post).rstrip("\n") + "\n"
-
-
-def _find_backlog_dir(start: Path | None = None) -> Path | None:
-    """Walk upward from start to find a docs/backlog/ directory."""
-    if start is None:
-        start = Path.cwd()
-    for parent in [start, *start.parents]:
-        candidate = parent / "docs" / "backlog"
-        if candidate.is_dir():
-            return candidate
-    return None
-
-
-def get_backlog_dir(project_path: Path | None = None, create: bool = False) -> Path:
-    """Return the backlog directory. Prefer an existing direct backlog for Project Ops targets."""
-    if project_path is not None:
-        if project_path.name == "backlog":
-            raise ValueError("--target must be the backlog store parent, not its backlog/ child")
-        direct_backlog = project_path / "backlog"
-        base = direct_backlog if direct_backlog.is_dir() else project_path / "docs" / "backlog"
-    else:
-        base = _find_backlog_dir(Path.cwd())
-        if base is None:
-            base = Path.cwd() / "docs" / "backlog"
-    if create:
-        base.mkdir(parents=True, exist_ok=True)
-    return base
-
-
-def get_items_dir(project_path: Path | None = None, create: bool = False) -> Path:
-    """Return the items directory, optionally creating it."""
-    base = get_backlog_dir(project_path, create=create)
-    items_dir = base / ITEMS_DIRNAME
-    if create:
-        items_dir.mkdir(parents=True, exist_ok=True)
-    return items_dir
-
-
-def get_item_filepath(item_id: str, project_path: Path | None = None, create: bool = False) -> Path:
-    """Get the resolved safe path for a backlog item. Raises ValueError if path traversal detected."""
-    if not re.match(r"^[a-zA-Z0-9_-]+$", item_id):
-        raise ValueError("Invalid item ID format")
-    items_dir = get_items_dir(project_path, create=create)
-    filepath = (items_dir / f"{item_id}.md").resolve()
-    if not filepath.is_relative_to(items_dir.resolve()):
-        raise ValueError("Path traversal detected")
-    return filepath
-
-
-def get_project_prefix(project_name: str) -> str:
-    return project_name[:3].upper()
 
 
 def check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> None:
@@ -186,7 +134,7 @@ def _lock_store(store: StoreContext):
 
 
 def _refresh_store_authority_locked(store: StoreContext) -> StoreContext:
-    """Reject a manifest that appeared or changed after a legacy context was resolved."""
+    """Reject a manifest that appeared or changed before mutation."""
     try:
         store.manifest_path.lstat()
     except FileNotFoundError:
@@ -326,16 +274,6 @@ def show_item(item_id: str, store: StoreContext) -> BacklogItem | None:
         if not all(dep in done_ids for dep in item.depends_on):
             item.is_blocked = True
     return item
-
-
-def list_legacy_items(project_path: Path | None = None) -> list[BacklogItem]:
-    """List items through the legacy project-path discovery adapter."""
-    return list_items(_legacy_store_context(project_path, _legacy_project_name(project_path), create=False))
-
-
-def show_legacy_item(item_id: str, project_path: Path | None = None) -> BacklogItem | None:
-    """Show an item through the legacy project-path discovery adapter."""
-    return show_item(item_id, _legacy_store_context(project_path, _legacy_project_name(project_path), create=False))
 
 
 def _validate_item_identity(
@@ -608,225 +546,3 @@ def _render_index(items: list[BacklogItem]) -> str:
 def generate_index(store: StoreContext) -> str:
     """Generate an INDEX.md overview using only an exact StoreContext."""
     return _render_index(list_items(store))
-
-
-def _legacy_prefix(project_name: str, project_path: Path | None) -> str:
-    """Apply historical directory/name prefix inference in the legacy adapter only."""
-    prefix = get_project_prefix(project_name)
-    items_dir = get_items_dir(project_path, create=False)
-    if not items_dir.exists():
-        return prefix
-    prefixes = {
-        item.id.split("-", 1)[0]
-        for filepath in sorted(items_dir.glob("*.md"))
-        if (item := _load_item(filepath)).project == project_name and "-" in item.id
-    }
-    return next(iter(prefixes)) if len(prefixes) == 1 else prefix
-
-
-def _legacy_project_name(project_path: Path | None) -> str:
-    """Preserve historical project-name inference at the CLI compatibility boundary."""
-    if project_path is not None:
-        return project_path.resolve().name
-    backlog_dir = get_backlog_dir(None)
-    if backlog_dir.is_dir() and backlog_dir.name == "backlog" and backlog_dir.parent.name == "docs":
-        return backlog_dir.parent.parent.resolve().name
-    return Path.cwd().resolve().name
-
-
-def _legacy_store_context(
-    project_path: Path | None,
-    project_name: str | None,
-    *,
-    create: bool,
-    id_prefix: str | None = None,
-) -> StoreContext:
-    """Resolve a historical target layout before entering exact mutation core."""
-    project_name = project_name or _legacy_project_name(project_path)
-    backlog_dir = get_backlog_dir(project_path, create=create)
-    manifest_path = backlog_dir / "backlog.json"
-    if manifest_path.exists() or manifest_path.is_symlink():
-        return load_store(backlog_dir)
-    items_path = get_items_dir(project_path, create=create)
-    index_path = backlog_dir / INDEX_FILENAME
-    manifest = StoreManifest.model_validate(
-        {
-            "schema": "backlog/Store@1",
-            "project_id": project_name,
-            "id_prefix": id_prefix or _legacy_prefix(project_name, project_path),
-        }
-    )
-    return StoreContext(
-        root=backlog_dir.resolve(),
-        manifest=manifest,
-        manifest_path=manifest_path,
-        items_path=items_path.resolve(),
-        index_path=index_path,
-        lock_path=backlog_dir.resolve(),
-    )
-
-
-def next_legacy_id(project_name: str, project_path: Path | None = None) -> str:
-    """Generate an ID through the legacy layout adapter."""
-    return next_id(_legacy_store_context(project_path, project_name, create=False))
-
-
-def add_legacy_item(item: BacklogItem, project_path: Path | None = None) -> Path:
-    """Create an item through the historical target-layout adapter."""
-    id_prefix = item.id.split("-", 1)[0] if item.id != "AUTO" and "-" in item.id else None
-    return add_item(
-        item,
-        _legacy_store_context(project_path, item.project, create=True, id_prefix=id_prefix),
-    )
-
-
-def update_legacy_item(
-    item_id: str,
-    updates: dict,
-    project_path: Path | None = None,
-    expected_revision: str | None = None,
-) -> BacklogItem | None:
-    """Patch an item through the historical target-layout adapter."""
-    current = show_legacy_item(item_id, project_path)
-    if current is None:
-        return None
-    return update_item(
-        item_id,
-        updates,
-        _legacy_store_context(
-            project_path,
-            current.project,
-            create=True,
-            id_prefix=current.id.split("-", 1)[0],
-        ),
-        expected_revision=expected_revision,
-    )
-
-
-def generate_legacy_index(
-    project_path: Path | None = None,
-    project: str | None = None,
-) -> str:
-    """Generate a historical-layout index without exposing discovery to core APIs."""
-    items = list_legacy_items(project_path)
-    if project:
-        items = [item for item in items if item.project == project]
-    return _render_index(items)
-
-
-def provision_legacy_store(
-    project_path: Path | None,
-    *,
-    project_id: str,
-    id_prefix: str,
-) -> StoreContext:
-    """Create a manifest for one validated legacy store without replacing any manifest."""
-    backlog_dir = get_backlog_dir(project_path, create=False)
-    try:
-        root_mode = backlog_dir.lstat().st_mode
-    except FileNotFoundError as error:
-        raise ValueError(f"Legacy store root is missing: {backlog_dir}") from error
-    if not stat.S_ISDIR(root_mode):
-        raise ValueError(f"Legacy store root must be a directory: {backlog_dir}")
-
-    root = backlog_dir.resolve(strict=True)
-    items_path = root / ITEMS_DIRNAME
-    index_path = root / INDEX_FILENAME
-    manifest_path = root / "backlog.json"
-    manifest = StoreManifest.model_validate(
-        {"schema": "backlog/Store@1", "project_id": project_id, "id_prefix": id_prefix}
-    )
-    store = StoreContext(
-        root=root,
-        manifest=manifest,
-        manifest_path=manifest_path,
-        items_path=items_path,
-        index_path=index_path,
-        lock_path=root,
-    )
-    with _lock_store(store):
-        for path, description, expected_mode in (
-            (items_path, "items directory", stat.S_ISDIR),
-            (index_path, "index", stat.S_ISREG),
-        ):
-            try:
-                mode = path.lstat().st_mode
-            except FileNotFoundError as error:
-                raise ValueError(f"Legacy {description} is missing: {path}") from error
-            if not expected_mode(mode):
-                raise ValueError(f"Legacy {description} has an invalid type: {path}")
-            if not path.resolve(strict=True).is_relative_to(root):
-                raise ValueError(f"Legacy {description} escapes store root: {path}")
-        try:
-            manifest_path.lstat()
-        except FileNotFoundError:
-            pass
-        else:
-            raise ValueError(f"Store manifest already exists and will not be overwritten: {manifest_path}")
-        validate_store_items(store)
-
-        temp_path = root / f".backlog.json.{uuid.uuid4().hex}.tmp"
-        temp_created = False
-        try:
-            with temp_path.open("x", encoding="utf-8") as temp_file:
-                temp_created = True
-                json.dump(manifest.model_dump(by_alias=True), temp_file, indent=2)
-                temp_file.write("\n")
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-            os.link(temp_path, manifest_path)
-        except FileExistsError as error:
-            raise ValueError(f"Store manifest already exists and will not be overwritten: {manifest_path}") from error
-        except OSError as error:
-            raise ValueError(f"Cannot publish store manifest without overwrite: {manifest_path}") from error
-        finally:
-            if temp_created:
-                with contextlib.suppress(FileNotFoundError):
-                    temp_path.unlink()
-        return load_store(root)
-
-
-def validate_legacy_store(
-    project_path: Path | None,
-    *,
-    project_id: str,
-    id_prefix: str,
-) -> StoreContext:
-    """Validate one manifest-less legacy store through the portable item parser without writing."""
-    backlog_dir = get_backlog_dir(project_path, create=False)
-    try:
-        root_mode = backlog_dir.lstat().st_mode
-    except FileNotFoundError as error:
-        raise ValueError(f"Legacy store root is missing: {backlog_dir}") from error
-    if not stat.S_ISDIR(root_mode):
-        raise ValueError(f"Legacy store root must be a directory: {backlog_dir}")
-    root = backlog_dir.resolve(strict=True)
-    items_path = root / ITEMS_DIRNAME
-    index_path = root / INDEX_FILENAME
-    manifest_path = root / "backlog.json"
-    if manifest_path.exists() or manifest_path.is_symlink():
-        raise ValueError(f"Legacy store manifest already exists: {manifest_path}")
-    for path, description, expected_mode in (
-        (items_path, "items directory", stat.S_ISDIR),
-        (index_path, "index", stat.S_ISREG),
-    ):
-        try:
-            mode = path.lstat().st_mode
-        except FileNotFoundError as error:
-            raise ValueError(f"Legacy {description} is missing: {path}") from error
-        if not expected_mode(mode):
-            raise ValueError(f"Legacy {description} has an invalid type: {path}")
-        if not path.resolve(strict=True).is_relative_to(root):
-            raise ValueError(f"Legacy {description} escapes store root: {path}")
-    store = StoreContext(
-        root=root,
-        manifest=StoreManifest.model_validate(
-            {"schema": "backlog/Store@1", "project_id": project_id, "id_prefix": id_prefix}
-        ),
-        manifest_path=manifest_path,
-        items_path=items_path,
-        index_path=index_path,
-        lock_path=root,
-    )
-    validate_store_items(store)
-    return store

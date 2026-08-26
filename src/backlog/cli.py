@@ -15,16 +15,13 @@ from .items import (
     BacklogItemParseError,
     PatchResult,
     RevisionConflictError,
-    _legacy_store_context,
     add_item,
     generate_index,
     get_warnings,
     list_items,
     patch_item,
-    provision_legacy_store,
     show_item,
     update_item,
-    validate_legacy_store,
     validate_store_items,
 )
 from .models import (
@@ -40,7 +37,6 @@ from .store import StoreContext, StoreLoadError, load_store
 app = typer.Typer(help="Unified backlog manager")
 console = Console()
 stderr_console = Console(stderr=True)
-_target_path: Path | None = None
 _store_context: StoreContext | None = None
 
 
@@ -83,38 +79,22 @@ def _print_json_error(code: str, message: str, details: dict | None = None) -> N
 @app.callback()
 def main(
     store: Annotated[
-        Path | None,
+        Path,
         typer.Option("--store", help="Exact absolute portable Backlog Store root"),
-    ] = None,
-    target: Annotated[
-        Path | None,
-        typer.Option("--target", help="Project root directory (default: auto-detect from cwd)"),
-    ] = None,
+    ],
 ):
-    global _store_context, _target_path
-    if store is not None and target is not None:
-        raise _CliInputError("--store cannot be combined with --target or CWD discovery.")
-    _target_path = target.resolve() if target else None
-    _store_context = None
-    if store is not None:
-        try:
-            _store_context = load_store(store)
-        except StoreLoadError as error:
-            raise _CliStoreError(str(error)) from error
-
-
-def _resolve_store_context(*, create: bool = False, project_name: str | None = None) -> StoreContext:
-    """Enter the exact core through either the authority or legacy outer adapter."""
-    if _store_context is not None:
-        return _store_context
+    global _store_context
     try:
-        return _legacy_store_context(
-            _target_path,
-            project_name,
-            create=create,
-        )
+        _store_context = load_store(store)
     except StoreLoadError as error:
         raise _CliStoreError(str(error)) from error
+
+
+def _resolve_store_context() -> StoreContext:
+    """Return the exact StoreContext loaded by the CLI callback."""
+    if _store_context is None:
+        raise _CliStoreError("--store is required.")
+    return _store_context
 
 
 def _print_table(items: list[BacklogItem], show_score: bool = False) -> None:
@@ -425,7 +405,7 @@ def add(
     dep_list = _parse_csv_list(depends_on)
     related_doc_list = _parse_csv_list(related_docs)
     body_content = _resolve_body(body, body_file, stdin) or ""
-    store = _resolve_store_context(create=True)
+    store = _resolve_store_context()
 
     try:
         item = BacklogItem(
@@ -556,10 +536,6 @@ def update(
 
     try:
         store = _resolve_store_context()
-        if _store_context is None:
-            current = show_item(item_id, store)
-            if current is not None:
-                store = _resolve_store_context(project_name=current.project)
         result = patch_item(item_id, updates, store, expected_revision=expected_revision)
     except BacklogItemParseError as e:
         if json_output:
@@ -769,9 +745,9 @@ def next_cmd(
 def index(
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Generate docs/backlog/INDEX.md overview."""
+    """Generate the exact Store INDEX.md overview."""
     try:
-        store = _resolve_store_context(create=True)
+        store = _resolve_store_context()
         content = generate_index(store)
         index_path = store.index_path
         index_path.write_text(content)
@@ -805,8 +781,6 @@ def edit(
         current = show_item(item_id, store)
         if current is None:
             raise ValueError(f"Item '{item_id}' not found.")
-        if _store_context is None:
-            store = _resolve_store_context(project_name=current.project)
         filepath = store.items_path / f"{item_id}.md"
     except (StoreLoadError, ValueError) as e:
         console.print(f"[red]Error: {e}[/red]")
@@ -840,64 +814,13 @@ def edit(
     os.system(f"{editor} {filepath}")
 
 
-@app.command(name="provision-store")
-def provision_store(
-    project_id: str = typer.Option(..., "--project-id", help="Manifest project_id to validate and persist"),
-    id_prefix: str = typer.Option(..., "--id-prefix", help="Manifest ID prefix to validate and persist"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-):
-    """Create a manifest for one validated legacy --target/CWD store."""
-    if _store_context is not None:
-        message = "provision-store requires a legacy --target or CWD store without --store."
-        if json_output:
-            _print_json_error("INVALID_INPUT", message)
-        else:
-            console.print(f"[red]Error: {message}[/red]")
-        raise typer.Exit(1)
-    try:
-        store = provision_legacy_store(
-            _target_path,
-            project_id=project_id,
-            id_prefix=id_prefix,
-        )
-    except (BacklogItemParseError, ValueError) as error:
-        if json_output:
-            _print_json_error("INVALID_INPUT", str(error))
-        else:
-            console.print(f"[red]Error: {error}[/red]")
-        raise typer.Exit(1) from error
-
-    data = {
-        "store": str(store.root),
-        "project_id": store.manifest.project_id,
-        "id_prefix": store.manifest.id_prefix,
-    }
-    if json_output:
-        _print_json_success(data)
-        return
-    console.print(f"[green]Provisioned[/green] {store.manifest_path}")
-
-
 @app.command(name="validate-store")
 def validate_store(
-    project_id: str | None = typer.Option(
-        None, "--project-id", help="Legacy store project_id to validate without writing"
-    ),
-    id_prefix: str | None = typer.Option(
-        None, "--id-prefix", help="Legacy store ID prefix to validate without writing"
-    ),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Validate all Store@1 items without creating or modifying store entries."""
     try:
-        if _store_context is not None:
-            if project_id is not None or id_prefix is not None:
-                raise ValueError("Exact --store validation derives identity from its manifest.")
-            store = _store_context
-        else:
-            if project_id is None or id_prefix is None:
-                raise ValueError("Legacy validation requires --project-id and --id-prefix.")
-            store = validate_legacy_store(_target_path, project_id=project_id, id_prefix=id_prefix)
+        store = _resolve_store_context()
         items = validate_store_items(store)
     except (BacklogItemParseError, StoreLoadError, ValueError) as error:
         if json_output:

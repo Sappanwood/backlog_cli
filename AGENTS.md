@@ -3,7 +3,6 @@
 > 人类开发者请阅读 [README.md](README.md)。外部 AI 如需**使用** backlog 工具：
 > - 读取 repo-owned skill [skills/backlog/SKILL.md](skills/backlog/SKILL.md)
 > - 全局 skill 入口应通过 symlink 指向该目录；不要复制维护另一份说明
-> - 旧入口 [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) 仅保留为兼容跳转
 
 ## 绝对红线
 
@@ -18,7 +17,6 @@
 | 文档 | 何时读 | 何时更新 |
 |------|--------|----------|
 | [skills/backlog/SKILL.md](skills/backlog/SKILL.md) | 外部 AI 学习如何使用 backlog 工具 | 新增/修改 CLI 命令、数据字段、排序规则后 |
-| [agent/AGENT_CONTRACT.md](agent/AGENT_CONTRACT.md) | 旧链接兼容入口 | skill 权威入口路径变化后 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 修改模块结构、引入新依赖、改变存储方案 | 组件关系变更、新增模块、技术选型变化 |
 | Catalog resolved `artifacts.adr.root` | 查看产品定位、架构边界和候选方案取舍时 | 新增、替代或废弃架构决策时 |
 | Project resolved `artifacts.backlog.root` 或已校验的 workspace `sources.workspace_artifacts.root/backlog` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
