@@ -13,6 +13,7 @@ from backlog.models import (
     Category,
     Effort,
     Impact,
+    ItemType,
     Priority,
     Status,
 )
@@ -49,6 +50,10 @@ class TestEnums:
         assert Category.FEATURE.value == "feature"
         assert Category.OPS.value == "ops"
         assert Category.TESTING.value == "testing"
+
+    def test_item_type_values(self):
+        assert ItemType.TASK.value == "task"
+        assert ItemType.EPIC.value == "epic"
 
 
 class TestWeights:
@@ -100,11 +105,25 @@ class TestBacklogItem:
         assert item.impact == Impact.MEDIUM
         assert item.status == Status.TODO
         assert item.source == ""
+        assert item.item_type == ItemType.TASK
+        assert item.parent_id is None
         assert item.fixed_at is None
         assert item.tags == []
         assert item.depends_on == []
         assert item.related_docs == []
         assert item.body == ""
+
+    def test_epic_cannot_have_a_parent(self):
+        with pytest.raises(ValidationError, match="Epic items cannot have a parent"):
+            BacklogItem(
+                id="TST-005",
+                project="test",
+                title="Nested epic",
+                category=Category.FEATURE,
+                priority=Priority.P1,
+                item_type=ItemType.EPIC,
+                parent_id="TST-001",
+            )
 
     def test_all_fields(self):
         today = date.today()

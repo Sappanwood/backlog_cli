@@ -49,6 +49,8 @@ backlog --store <absolute-backlog-root> <子命令> --json
 | 查询条目 | `list --status todo --json` |
 | 获取完整条目 | `show <ID> --json` |
 | 创建条目 | `add -T "标题" -c <category> --priority P1 --body-file /tmp/body.md --json` |
+| 创建 Epic | `add -T "标题" -c <category> --priority P1 --item-type epic --body-file /tmp/body.md --json` |
+| 创建 Epic 子任务 | `add -T "标题" -c <category> --priority P1 --parent-id <EPIC-ID> --body-file /tmp/body.md --json` |
 | patch 条目 | `update <ID> --status in_progress --expected-revision <REV> --json` |
 | 获取工作队列 | `next -n 5 --json` |
 
@@ -69,6 +71,11 @@ error 退出码为 2。常见稳定错误码有 `STORE_INVALID`、`INVALID_INPUT
 不应由 Agent 持久化。`list --json` 与 `show --json` 都返回三者；`next --json` 返回 `queue_state`
 （`in_progress`、`ready` 或 `blocked`）和 `blocked_by`。`next` 的 `score_hint` 只解释兼容排序，不能用于
 编排或完成度判断。
+
+`item_type` 是 `task` 或 `epic`，旧条目默认视为 `task`。`parent_id` 只允许 task 指向同一 store 内的 epic，
+形成一层归属关系；epic 不得再有 parent。`parent_id` 不产生阻塞，执行顺序仍只使用 `depends_on`。
+Epic 不进入 `next` 队列，其声明状态也不会根据子任务自动完成。移除归属使用
+`update <ID> --clear-parent --expected-revision <REV> --json`。
 
 <a id="Backlog-Item-Body-Contract"></a>
 

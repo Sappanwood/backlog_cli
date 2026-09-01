@@ -12,7 +12,7 @@ from pathlib import Path
 
 import frontmatter
 
-from .models import BacklogItem, Status
+from .models import BacklogItem, ItemType, Status
 from .store import StoreContext, load_store
 
 ITEMS_DIRNAME = "items"
@@ -78,6 +78,19 @@ def check_dependencies(item_id: str, depends_on: list[str], store: StoreContext)
     for node in graph:
         if visited[node] == 0 and dfs(node):
             raise ValueError("Circular dependency detected.")
+
+
+def validate_parent_relations(items: list[BacklogItem]) -> None:
+    """Validate one-level epic ownership without changing dependency semantics."""
+    item_by_id = {item.id: item for item in items}
+    for item in items:
+        if item.parent_id is None:
+            continue
+        parent = item_by_id.get(item.parent_id)
+        if parent is None:
+            raise ValueError(f"Parent item '{item.parent_id}' does not exist.")
+        if parent.item_type != ItemType.EPIC:
+            raise ValueError(f"Parent item '{item.parent_id}' must be an epic.")
 
 
 _items_warnings: list[str] = []
@@ -255,6 +268,7 @@ def validate_store_items(store: StoreContext) -> list[BacklogItem]:
             raise ValueError(f"Item frontmatter ID '{item.id}' does not match physical item ID '{filepath.stem}'.")
         _validate_item_identity(item, store)
         validated.append(item)
+    validate_parent_relations(validated)
     return validated
 
 
@@ -385,6 +399,7 @@ def add_item(item: BacklogItem, store: StoreContext) -> Path:
             item.revision = uuid.uuid4().hex[:8]
 
         check_dependencies(item.id, item.depends_on, store)
+        validate_parent_relations([*list_items(store), item])
         filepath = _store_item_path(item.id, store)
         if filepath.exists():
             raise FileExistsError(f"Backlog item with ID '{item.id}' already exists.")
@@ -446,8 +461,7 @@ def patch_item(
             exclude_none=True,
         )
         for key, value in updates.items():
-            if value is not None:
-                current_data[key] = _jsonify(value)
+            current_data[key] = _jsonify(value)
         if current_data.get("status") == Status.DONE.value:
             if current.status != Status.DONE or current.fixed_at is None:
                 current_data["fixed_at"] = date.today().isoformat()
@@ -456,6 +470,8 @@ def patch_item(
 
         updated = BacklogItem.model_validate(current_data)
         _validate_item_identity(updated, store)
+        all_items = [candidate for candidate in list_items(store) if candidate.id != item_id]
+        validate_parent_relations([*all_items, updated])
         compared_fields = set(current_data) | set(
             updated.model_dump(mode="json", exclude={"score", "effective_status"})
         )
@@ -530,7 +546,13 @@ def _render_index(items: list[BacklogItem]) -> str:
     lines.append("")
 
     lines.append("## Recommended Next (by score)")
-    active = [i for i in items if i.effective_status in (Status.TODO, Status.IN_PROGRESS) and i.score > 0]
+    active = [
+        i
+        for i in items
+        if i.item_type == ItemType.TASK
+        and i.effective_status in (Status.TODO, Status.IN_PROGRESS)
+        and i.score > 0
+    ]
     if active:
         lines.append("")
     for item in active[:20]:

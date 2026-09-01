@@ -52,6 +52,17 @@ uv run backlog --store /absolute/path/to/backlog add \
   -b "Record successful and failed login attempts; verify with unit tests."
 ```
 
+Create a one-level epic and assign a task to it:
+
+```bash
+uv run backlog --store /absolute/path/to/backlog add \
+  -T "Build the demo data foundation" -c feature --priority P1 \
+  --item-type epic
+uv run backlog --store /absolute/path/to/backlog add \
+  -T "Define the data contract" -c architecture --priority P1 \
+  --parent-id PRO-001
+```
+
 For multiline Markdown bodies, prefer `--body-file` or `--stdin`:
 
 ```bash
@@ -75,6 +86,8 @@ Each item has fields such as:
 - `id`: stores generate it from manifest `id_prefix`, for example `BAC-001`
 - `project`: exact stores take this identifier from manifest `project_id`
 - `title`: short task title
+- `item_type`: `task` by default, or `epic` for a non-executable coordination container
+- `parent_id`: the owning epic ID for a task, or `null`; ownership is limited to one level
 - `category`: `bug`, `feature`, `docs`, `testing`, `ops`, and other supported categories
 - `priority`: `P0`, `P1`, `P2`, `P3`
 - `effort`: `XS`, `S`, `M`, `L`, `XL`
@@ -92,6 +105,8 @@ The human `next` view retains score-based recommendations for compatibility. Age
 whose records identify `queue_state` as `in_progress`, `ready`, or `blocked`, include `blocked_by`, and expose score
 only as the explainable `score_hint` compatibility field. Without `--status`, Agent JSON returns all three states;
 an explicit `--status todo|in_progress|blocked` filters by effective status.
+Epic items remain visible through `list` and `show` but are excluded from both human and Agent `next` queues.
+`parent_id` is independent of `depends_on`: ownership groups work, while dependencies determine blocking.
 
 ## AI Agent Contract
 
@@ -113,8 +128,8 @@ Project architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 ## Responsibility Boundaries
 
-Backlog CLI owns portable task intent, item CRUD, declared and derived status, dependencies, revisions, and the
-derived index.
+Backlog CLI owns portable task intent, one-level epic ownership, item CRUD, declared and derived status,
+dependencies, revisions, and the derived index.
 
 Workspace Control owns local project routing, Catalog descriptors, and development services. Sigil owns execution
 workflow concerns such as runs, claims, checkpoints, submissions, review, worktrees, scheduling, and deciding whether

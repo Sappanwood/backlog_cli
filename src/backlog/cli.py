@@ -29,6 +29,7 @@ from .models import (
     Category,
     Effort,
     Impact,
+    ItemType,
     Priority,
     Status,
 )
@@ -243,6 +244,7 @@ def _agent_mutation(
 
 @app.command(name="list")
 def list_cmd(
+    item_type: ItemType | None = typer.Option(None, "--item-type", help="Filter by item type"),
     category: Category | None = typer.Option(None, "--category", "-c", help="Filter by category"),
     priority: str | None = typer.Option(None, "--priority", help="Filter by priority (comma-separated, e.g. P0,P1)"),
     status: Status | None = typer.Option(None, "--status", "-s", help="Filter by status"),
@@ -283,6 +285,8 @@ def list_cmd(
         raise typer.Exit(1) from e
 
     items = list(all_items)
+    if item_type:
+        items = [i for i in items if i.item_type == item_type]
     if category:
         items = [i for i in items if i.category == category]
     if allowed_priorities is not None:
@@ -345,6 +349,7 @@ def show(
     console.print(f"[bold white]{item.title}[/bold white]")
     console.print()
     console.print(f"Status: [bold]{item.effective_status.value}[/bold]")
+    console.print(f"Item type: {item.item_type.value}  |  Parent: {item.parent_id or '-'}")
     console.print(f"Effort: {item.effort.value}  |  Impact: {item.impact.value}  |  Score: {int(item.score)}")
     console.print(f"Project: {item.project}  |  Source: {item.source or '-'}")
     if item.tags:
@@ -381,6 +386,8 @@ def add(
     title: str = typer.Option(..., "--title", "-T", help="Item title"),
     category: Category = typer.Option(..., "--category", "-c", help="Category"),
     priority: Priority = typer.Option(..., "--priority", help="Priority (P0-P3)"),
+    item_type: ItemType = typer.Option(ItemType.TASK, "--item-type", help="Item type: task or epic"),
+    parent_id: str | None = typer.Option(None, "--parent-id", help="Owning epic item ID"),
     effort: Effort | None = typer.Option(None, "--effort", "-e", help="Effort estimate"),
     impact: Impact | None = typer.Option(None, "--impact", "-i", help="Impact level"),
     tags: str = typer.Option("", "--tags", help="Comma-separated tags"),
@@ -412,6 +419,8 @@ def add(
             id="AUTO",
             project=store.manifest.project_id,
             title=title,
+            item_type=item_type,
+            parent_id=parent_id,
             category=category,
             priority=priority,
             effort=effort,
@@ -474,6 +483,9 @@ def add(
 def update(
     item_id: str = typer.Argument(..., help="Item ID to update"),
     title: str | None = typer.Option(None, "--title", help="New title"),
+    item_type: ItemType | None = typer.Option(None, "--item-type", help="New item type"),
+    parent_id: str | None = typer.Option(None, "--parent-id", help="New owning epic item ID"),
+    clear_parent: bool = typer.Option(False, "--clear-parent", help="Remove the owning epic relation"),
     category: Category | None = typer.Option(None, "--category", "-c", help="New category"),
     priority: Priority | None = typer.Option(None, "--priority", help="New priority"),
     effort: Effort | None = typer.Option(None, "--effort", "-e", help="New effort"),
@@ -497,11 +509,19 @@ def update(
     """Update a backlog item."""
     if fixed and status is not None and status != Status.DONE:
         raise typer.BadParameter("Cannot set both --fixed and a non-done --status.")
+    if parent_id is not None and clear_parent:
+        raise typer.BadParameter("Cannot set both --parent-id and --clear-parent.")
     updates: dict = {}
     body_content = _resolve_body(body, body_file, stdin)
 
     if title is not None:
         updates["title"] = title
+    if item_type is not None:
+        updates["item_type"] = item_type
+    if parent_id is not None:
+        updates["parent_id"] = parent_id
+    if clear_parent:
+        updates["parent_id"] = None
     if category is not None:
         updates["category"] = category
     if priority is not None:
@@ -696,7 +716,9 @@ def next_cmd(
         queue = [
             item
             for item in items
-            if item.effective_status in queue_states and (status is None or item.effective_status == status)
+            if item.item_type == ItemType.TASK
+            and item.effective_status in queue_states
+            and (status is None or item.effective_status == status)
         ]
         queue.sort(
             key=lambda item: (
@@ -724,7 +746,11 @@ def next_cmd(
         return
 
     human_status = status or Status.TODO
-    active = [i for i in items if i.effective_status == human_status and i.score > 0]
+    active = [
+        i
+        for i in items
+        if i.item_type == ItemType.TASK and i.effective_status == human_status and i.score > 0
+    ]
     active.sort(key=lambda x: x.score, reverse=True)
     active = active[:limit]
 

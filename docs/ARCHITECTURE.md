@@ -123,7 +123,19 @@ expected revision、验证依赖、识别 no-op，并仅在有实际变更时生
 `next --json` 是 Agent work queue：每条记录有 `queue_state`（`in_progress`、`ready` 或 `blocked`）与
 `blocked_by`，队列按状态、priority、ID 确定性排序。队列只暴露 `score_hint` 作为兼容解释信息，不能当作
 任务完成度或编排决定。未指定 `--status` 时返回全部三态；显式 `--status todo|in_progress|blocked` 按
-effective status 过滤。非 JSON 的 `next` 和其他 human/admin commands 保持原有兼容表面。
+effective status 过滤。`item_type=epic` 的协调容器不进入 human 或 Agent `next` 队列。非 JSON 的 `next`
+和其他 human/admin commands 保持原有兼容表面。
+
+### Epic ownership
+
+Item hierarchy is intentionally limited to one level. `item_type` is `task` by default or `epic` for a coordination
+container. A task may set `parent_id` to an existing epic in the same exact store; epics cannot have parents, and a
+task cannot be used as a parent. Children are derived from `parent_id` and are never persisted as a second list.
+
+Ownership is orthogonal to execution dependencies. `parent_id` never changes `effective_status` or `blocked_by`,
+while `depends_on` continues to be the only relation that affects readiness. Epic status is declared by the caller;
+the core does not infer completion from child status. Mutations and `validate-store` reject missing parents,
+non-epic parents, self-parenting, and attempts to demote an epic that still owns children.
 
 ### 推荐排序
 
@@ -145,12 +157,15 @@ class Status(str, Enum): todo, in_progress, done, cancelled, blocked
 class Effort(str, Enum): XS, S, M, L, XL
 class Impact(str, Enum): high, medium, low
 class Category(str, Enum): bug, a11y, ux, ..., ops
+class ItemType(str, Enum): task, epic
 
 # 模型
 class BacklogItem(BaseModel):
     id: str
     project: str
     title: str
+    item_type: ItemType
+    parent_id: str | None
     category: Category
     priority: Priority
     effort: Effort
@@ -174,6 +189,7 @@ patch_item(item_id: str, updates: dict, store: StoreContext, expected_revision: 
 next_id(store: StoreContext) -> str
 generate_index(store: StoreContext) -> str
 check_dependencies(item_id: str, depends_on: list[str], store: StoreContext) -> None
+validate_parent_relations(items: list[BacklogItem]) -> None
 ```
 
 `list_items` 和 `show_item` 是 portable core read API：调用者必须先通过

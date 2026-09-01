@@ -41,13 +41,21 @@ def _write_item(
     status: str = "todo",
     depends_on: list[str] | None = None,
     project_id: str = "agent-project",
+    item_type: str | None = None,
+    parent_id: str | None = None,
 ) -> None:
     dependency_lines = ", ".join(depends_on or [])
+    hierarchy = ""
+    if item_type is not None:
+        hierarchy += f"item_type: {item_type}\n"
+    if parent_id is not None:
+        hierarchy += f"parent_id: {parent_id}\n"
     (store / "items" / f"{item_id}.md").write_text(
         "---\n"
         f"id: {item_id}\n"
         f"project: {project_id}\n"
         f"title: {item_id} title\n"
+        f"{hierarchy}"
         "category: feature\n"
         "priority: P2\n"
         "effort: M\n"
@@ -84,6 +92,97 @@ def test_agent_list_and_show_include_effective_status_and_blockers(tmp_path: Pat
 
     shown = _json(runner, ["--store", str(store), "show", "AGT-002", "--json"])
     assert shown["data"]["blocked_by"] == ["AGT-001"]
+
+
+def test_legacy_items_default_to_task_without_a_parent(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    _write_item(store, "AGT-001")
+
+    shown = _json(CliRunner(), ["--store", str(store), "show", "AGT-001", "--json"])
+
+    assert shown["data"]["item_type"] == "task"
+    assert shown["data"]["parent_id"] is None
+
+
+def test_agent_adds_epic_and_child_but_only_queues_the_child(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    runner = CliRunner()
+    epic = _json(
+        runner,
+        [
+            "--store", str(store), "add",
+            "--title", "Data foundation", "--category", "feature", "--priority", "P1",
+            "--item-type", "epic", "--json",
+        ],
+    )["data"]["result"]
+    child = _json(
+        runner,
+        [
+            "--store", str(store), "add",
+            "--title", "Define the data contract", "--category", "architecture", "--priority", "P1",
+            "--parent-id", epic["id"], "--json",
+        ],
+    )["data"]["result"]
+
+    assert epic["item_type"] == "epic"
+    assert epic["parent_id"] is None
+    assert child["item_type"] == "task"
+    assert child["parent_id"] == epic["id"]
+    queue = _json(runner, ["--store", str(store), "next", "--json"])["data"]
+    assert [item["id"] for item in queue] == [child["id"]]
+    epics = _json(runner, ["--store", str(store), "list", "--item-type", "epic", "--json"])["data"]
+    assert [item["id"] for item in epics] == [epic["id"]]
+
+
+def test_agent_can_clear_a_parent_but_cannot_demote_an_epic_with_children(tmp_path: Path) -> None:
+    store = _make_store(tmp_path)
+    _write_item(store, "AGT-001", item_type="epic")
+    _write_item(store, "AGT-002", item_type="task", parent_id="AGT-001")
+    runner = CliRunner()
+
+    invalid = runner.invoke(
+        app,
+        ["--store", str(store), "update", "AGT-001", "--item-type", "task", "--json"],
+    )
+    assert invalid.exit_code == 1
+    assert "must be an epic" in json.loads(invalid.stdout)["error"]["message"]
+
+    cleared = _json(
+        runner,
+        ["--store", str(store), "update", "AGT-002", "--clear-parent", "--json"],
+    )["data"]
+    assert cleared["changed_fields"] == ["parent_id"]
+    assert cleared["result"]["parent_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("parent_id", "expected_message"),
+    [
+        ("AGT-404", "Parent item 'AGT-404' does not exist"),
+        ("AGT-001", "Parent item 'AGT-001' must be an epic"),
+    ],
+)
+def test_agent_rejects_invalid_parent_relation(
+    tmp_path: Path,
+    parent_id: str,
+    expected_message: str,
+) -> None:
+    store = _make_store(tmp_path)
+    _write_item(store, "AGT-001")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--store", str(store), "add",
+            "--title", "Invalid child", "--category", "feature", "--priority", "P2",
+            "--parent-id", parent_id, "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "INVALID_INPUT"
+    assert expected_message in payload["error"]["message"]
 
 
 def test_agent_list_uses_full_store_for_blockers_after_filters_and_limit(tmp_path: Path) -> None:

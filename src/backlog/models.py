@@ -53,6 +53,11 @@ class Category(StrEnum):
     OPS = "ops"
 
 
+class ItemType(StrEnum):
+    TASK = "task"
+    EPIC = "epic"
+
+
 PRIORITY_WEIGHT: dict[Priority, int] = {
     Priority.P0: 100,
     Priority.P1: 50,
@@ -79,6 +84,8 @@ class BacklogItem(BaseModel):
     id: str
     project: str
     title: str
+    item_type: ItemType = ItemType.TASK
+    parent_id: str | None = None
     category: Category
     priority: Priority
     effort: Effort = Effort.M
@@ -112,8 +119,19 @@ class BacklogItem(BaseModel):
             raise ValueError("Project name can only contain alphanumeric characters, hyphens, and underscores")
         return v
 
+    @field_validator("parent_id")
+    @classmethod
+    def validate_parent_id(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"[a-zA-Z0-9_-]+", v):
+            raise ValueError("Parent ID can only contain alphanumeric characters, hyphens, and underscores")
+        return v
+
     @model_validator(mode="after")
     def clear_fixed_at_unless_done(self) -> "BacklogItem":
+        if self.item_type == ItemType.EPIC and self.parent_id is not None:
+            raise ValueError("Epic items cannot have a parent")
+        if self.parent_id == self.id:
+            raise ValueError(f"Item '{self.id}' cannot be its own parent")
         if self.status != Status.DONE:
             self.fixed_at = None
         return self
