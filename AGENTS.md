@@ -22,8 +22,8 @@
 | Project resolved `artifacts.backlog.root` 或已校验的 workspace `sources.workspace_artifacts.root/backlog` | 查看任务状态与验收范围 | 通过 backlog CLI 增改条目时 |
 | Catalog resolved `artifacts.plans.root` | 讨论项目长期演进、Agent 原生任务生命周期、skills/subagents 或独立控制平面时 | 新增或更新执行计划时 |
 | Catalog resolved `artifacts.research.root` | 查阅项目级调研证据时 | 完成项目级调研时 |
-| `backlog --store <resolved exact backlog root> list --status todo --json` | **进入项目时自动执行**；寻找下一个开发任务 | 完成条目后使用 `update <ID> --status done --expected-revision <REV> --json` 标记 |
-| `backlog --store <resolved exact backlog root> stats --json` | 了解项目待办概览 | 每次新增/更新条目后自动反映，向用户汇报 |
+| `backlog --store <resolved exact backlog root> list --status todo --json` | 选取下一项任务或评估优先级时；指定 ID 时只读取对应条目及必要依赖，普通明确任务不自动查询待办 | 完成条目后使用 `update <ID> --status done --expected-revision <REV> --json` 标记 |
+| `backlog --store <resolved exact backlog root> stats --json` | 用户要求项目待办概览，或当前决策需要汇总统计时 | 只读统计；新增/更新条目后无需额外查询或汇报统计 |
 
 ## 项目速览
 
